@@ -567,10 +567,14 @@ device_driver::create_device!(
 
             /// Torque switch
             /// - Min: 0, Max: 3
-            switch: uint as enum TorqueSwitch {
+            mode: uint as enum TorqueMode {
+                /// Disable torque output/damping state
                 Disable = 0,
+                /// Enable torque output
                 Enable = 1,
+                /// Write the free state
                 Free = 2,
+                /// Unexpected value. This is a bug!
                 Unknown = catch_all,
             } = 0..8,
         },
@@ -578,11 +582,11 @@ device_driver::create_device!(
         /// Target position
         /// - Min: 0, Max: 1023
         /// - Initial: 0
-        /// - Unit: Syep
+        /// - Unit: Step
         /// - Storage: SRAM
         /// - Bytes: 2
         ///
-        /// Each step corresponds to the value of the minimum resolution angle, and it is used in absolute position control mode. The maximum value shoulf be the maximum effective angle.
+        /// Each step corresponds to the value of the minimum resolution angle, and it is used in absolute position control mode. The maximum value should be the maximum effective angle.
         register TARGET_POSITION {
             const ADDRESS = 0x2A;
             const SIZE_BITS = 16;
@@ -592,7 +596,7 @@ device_driver::create_device!(
             /// Target position
             /// - Min: 0, Max: 1023
             /// - Unit: Step
-            position: uint = 0..16,
+            position: uint = 0..10,
         },
 
         /// Operation time
