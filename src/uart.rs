@@ -28,6 +28,10 @@ where
     }
 
     pub fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
+        if id == 0xFE {
+            return Err(ProtocolError::InvalidId);
+        }
+
         let mut response = [];
         self.transfer(id, Instruction::Ping, &[], &mut response)?;
         Ok(())
@@ -45,6 +49,88 @@ where
         Ok(())
     }
 
+    pub fn reg_write(
+        &mut self,
+        id: u8,
+        address: u8,
+        data: &[u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut params = [0u8; 256];
+        if data.len() + 1 > params.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+        params[0] = address;
+        params[1..1 + data.len()].copy_from_slice(data);
+
+        let mut response = [];
+        self.transfer(id, Instruction::RegWrite, &params[..1 + data.len()], &mut response)?;
+        Ok(())
+    }
+
+    pub fn sync_write(
+        &mut self,
+        address: u8,
+        data_len: u8,
+        payload: &[u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut params = [0u8; 256];
+        if 2 + payload.len() > params.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+        params[0] = address;
+        params[1] = data_len;
+        params[2..2 + payload.len()].copy_from_slice(payload);
+
+        let mut response = [];
+        self.transfer(0xFE, Instruction::SyncWrite, &params[..2 + payload.len()], &mut response)?;
+        Ok(())
+    }
+
+    pub fn sync_read(
+        &mut self,
+        address: u8,
+        data_len: u8,
+        ids: &[u8],
+        output: &mut [u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut params = [0u8; 256];
+        if 2 + ids.len() > params.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+        params[0] = address;
+        params[1] = data_len;
+        params[2..2 + ids.len()].copy_from_slice(ids);
+
+        let param_slice = &params[..2 + ids.len()];
+        let length = (param_slice.len() + 2) as u8;
+        let id = 0xFE;
+        let instruction = Instruction::SyncRead;
+
+        let checksum = Self::calculate_checksum(id, length, instruction as u8, param_slice);
+        let header = [0xFF, 0xFF, id, length, instruction as u8];
+
+        self.interface
+            .write_all(&header)
+            .map_err(ProtocolError::Serial)?;
+        self.interface
+            .write_all(param_slice)
+            .map_err(ProtocolError::Serial)?;
+        self.interface
+            .write_all(&[checksum])
+            .map_err(ProtocolError::Serial)?;
+
+        if output.len() < ids.len() * data_len as usize {
+            return Err(ProtocolError::InvalidLength);
+        }
+
+        for (i, &expected_id) in ids.iter().enumerate() {
+            let start = i * data_len as usize;
+            let end = start + data_len as usize;
+            self.read_response(expected_id, &mut output[start..end])?;
+        }
+
+        Ok(())
+    }
 
     fn calculate_checksum(id: u8, length: u8, instruction: u8, params: &[u8]) -> u8 {
         let mut sum: u32 = id as u32 + length as u32 + instruction as u32;
@@ -74,36 +160,11 @@ where
         self.id = None;
     }
 
-    /// Generic transfer function
-    /// Sends instruction and parameters, and reads response if applicable.
-    /// Returns the number of bytes read into `response_buf`.
-    pub fn transfer(
+    fn read_response(
         &mut self,
-        id: u8,
-        instruction: Instruction,
-        params: &[u8],
+        expected_id: u8,
         response_buf: &mut [u8],
     ) -> Result<usize, ProtocolError<I::Error>> {
-        let length = (params.len() + 2) as u8;
-        let checksum = Self::calculate_checksum(id, length, instruction as u8, params);
-        let header = [0xFF, 0xFF, id, length, instruction as u8];
-
-        self.interface
-            .write_all(&header)
-            .map_err(ProtocolError::Serial)?;
-        self.interface
-            .write_all(params)
-            .map_err(ProtocolError::Serial)?;
-        self.interface
-            .write_all(&[checksum])
-            .map_err(ProtocolError::Serial)?;
-
-        // If broadcast ID (0xFE), usually no response, except PING (0x01) is not allowed for broadcast.
-        if id == 0xFE {
-            return Ok(0);
-        }
-
-        // Read Response
         // 1. Scan for Header 0xFF 0xFF
         loop {
             let b = self.read_byte()?;
@@ -119,7 +180,7 @@ where
         let received_id = self.read_byte()?;
         let length = self.read_byte()?;
 
-        if received_id != id {
+        if received_id != expected_id {
             return Err(ProtocolError::InvalidId);
         }
 
@@ -160,6 +221,38 @@ where
         response_buf[..copy_len].copy_from_slice(&response_params[..copy_len]);
 
         Ok(response_params.len())
+    }
+
+    /// Generic transfer function
+    /// Sends instruction and parameters, and reads response if applicable.
+    /// Returns the number of bytes read into `response_buf`.
+    pub fn transfer(
+        &mut self,
+        id: u8,
+        instruction: Instruction,
+        params: &[u8],
+        response_buf: &mut [u8],
+    ) -> Result<usize, ProtocolError<I::Error>> {
+        let length = (params.len() + 2) as u8;
+        let checksum = Self::calculate_checksum(id, length, instruction as u8, params);
+        let header = [0xFF, 0xFF, id, length, instruction as u8];
+
+        self.interface
+            .write_all(&header)
+            .map_err(ProtocolError::Serial)?;
+        self.interface
+            .write_all(params)
+            .map_err(ProtocolError::Serial)?;
+        self.interface
+            .write_all(&[checksum])
+            .map_err(ProtocolError::Serial)?;
+
+        // If broadcast ID (0xFE), usually no response, except PING (0x01) is not allowed for broadcast.
+        if id == 0xFE {
+            return Ok(0);
+        }
+
+        self.read_response(id, response_buf)
     }
 }
 

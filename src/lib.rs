@@ -1,11 +1,30 @@
+#![no_std]
 use crate::registers::{BaudRate, SclInternal, TorqueMode};
 use crate::uart::{UartBusInterface, VersionInformation};
-use device_driver::RegisterInterface;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 
 mod mock;
 mod registers;
 mod uart;
+
+/// Resolution of the servo in steps (0-1023)
+pub const RESOLUTION_STEPS: u16 = 1024;
+/// Maximum effective angle in degrees
+pub const MAX_ANGLE_DEGREES: f32 = 220.0;
+/// Minimum resolution angle (degrees per step)
+pub const DEGREES_PER_STEP: f32 = 0.21484375;
+/// No-load speed in steps per second
+pub const NO_LOAD_SPEED_STEPS_PER_SEC: u16 = 1500;
+/// No-load speed in RPM
+pub const NO_LOAD_SPEED_RPM: u16 = 54;
+
+pub const fn degrees_to_steps(degrees: f32) -> u16 {
+    (degrees / DEGREES_PER_STEP) as u16
+}
+
+pub const fn steps_to_degrees(steps: u16) -> f32 {
+    steps as f32 * DEGREES_PER_STEP
+}
 
 #[derive(Debug)]
 pub enum ProtocolError<E> {
@@ -32,6 +51,34 @@ pub enum Instruction {
     Reset = 0x06,
     SyncRead = 0x82,
     SyncWrite = 0x83,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ScsPositionMove {
+    pub id: u8,
+    pub position: u16,
+    pub time: u16,
+    pub speed: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ScsStatus {
+    pub voltage_error: bool,
+    pub temperature_error: bool,
+    pub overload_error: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub struct ScsServoState {
+    pub id: u8,
+    pub position: u16,
+    pub speed: f32,
+    pub load: f32,
+    pub voltage: f32,
+    pub temperature: f32,
 }
 
 pub struct SCLBus<I> {
@@ -109,7 +156,7 @@ where
         self.device.interface.ping(id)
     }
 
-    pub fn configure_torque(
+    pub fn set_torque_mode(
         &mut self,
         id: u8,
         mode: TorqueMode,
@@ -123,6 +170,178 @@ where
         })
     }
 
+    pub fn set_angle_limits(
+        &mut self,
+        id: u8,
+        min_angle_steps: u16,
+        max_angle_steps: u16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if min_angle_steps > 1023 || max_angle_steps > 1023 || min_angle_steps > max_angle_steps {
+            return Err(ProtocolError::InvalidSetting);
+        }
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device
+                .minimum_angle()
+                .write(|w| w.set_angle(min_angle_steps))?;
+            device
+                .maximum_angle()
+                .write(|w| w.set_angle(max_angle_steps))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_voltage_limits(
+        &mut self,
+        id: u8,
+        min_volts: f32,
+        max_volts: f32,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let min_val = (min_volts * 10.0) as u8;
+        let max_val = (max_volts * 10.0) as u8;
+
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device
+                .minimum_input_voltage()
+                .write(|w| w.set_voltage(min_val))?;
+            device
+                .maximum_input_voltage()
+                .write(|w| w.set_voltage(max_val))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_max_temperature_limit(
+        &mut self,
+        id: u8,
+        max_temp_celsius: f32,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let val = max_temp_celsius as u8;
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device
+                .maximum_temperature()
+                .write(|w| w.set_temperature(val))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_max_torque(
+        &mut self,
+        id: u8,
+        max_torque_percent: f32,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let val = (max_torque_percent * 10.0) as u16;
+        if val > 1000 {
+            return Err(ProtocolError::InvalidSetting);
+        }
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device.maximum_torque().write(|w| w.set_torque(val))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_pid_coefficients(
+        &mut self,
+        id: u8,
+        kp: u8,
+        kd: u8,
+        ki: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device.p_coefficient().write(|w| w.set_coefficient(kp))?;
+            device.d_coefficient().write(|w| w.set_coefficient(kd))?;
+            device.i_coefficient().write(|w| w.set_coefficient(ki))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_protection_config(
+        &mut self,
+        id: u8,
+        protection_torque_percent: u8,
+        protection_time_ms: u16,
+        overload_torque_percent: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let time_val = (protection_time_ms / 40).min(254) as u8;
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device
+                .protection_torque()
+                .write(|w| w.set_torque(protection_torque_percent))?;
+            device.protection_time().write(|w| w.set_time(time_val))?;
+            device
+                .overload_torque()
+                .write(|w| w.set_torque(overload_torque_percent))?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_alarm_led(
+        &mut self,
+        id: u8,
+        voltage: bool,
+        temperature: bool,
+        overload: bool,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device.led_alarm_condition().write(|w| {
+                w.set_voltage(voltage);
+                w.set_temperature(temperature);
+                w.set_overload(overload);
+            })?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn set_alarm_shutdown(
+        &mut self,
+        id: u8,
+        voltage: bool,
+        temperature: bool,
+        overload: bool,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            device.lock_flag().write(|w| w.set_locked(false))?;
+            device.unloading_conditions().write(|w| {
+                w.set_voltage(voltage);
+                w.set_temperature(temperature);
+                w.set_overload(overload);
+            })?;
+            device.lock_flag().write(|w| w.set_locked(true))?;
+            Ok(())
+        })
+    }
+
+    pub fn read_status(&mut self, id: u8) -> Result<ScsStatus, ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            let status = device.servo_status().read()?;
+            Ok(ScsStatus {
+                voltage_error: status.voltage(),
+                temperature_error: status.temperature(),
+                overload_error: status.overload(),
+            })
+        })
+    }
+
+    pub fn is_moving(&mut self, id: u8) -> Result<bool, ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            let moving = device.move_flag().read()?.flag();
+            Ok(moving)
+        })
+    }
+
     pub fn set_target_position(
         &mut self,
         id: u8,
@@ -132,9 +351,7 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         self.transaction(id, |device| {
-            device
-                .target_position()
-                .write(|w| w.set_position(steps))?;
+            device.target_position().write(|w| w.set_position(steps))?;
             Ok(())
         })
     }
@@ -146,17 +363,29 @@ where
         })
     }
 
-    pub fn current_speed(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
+    pub fn current_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
-            let speed = device.current_speed().read()?.speed();
+            let speed_raw = device.current_speed().read()?.speed();
+            let speed = if speed_raw & 0x8000 != 0 {
+                -1.0 * (speed_raw & 0x7FFF) as f32
+            } else {
+                speed_raw as f32
+            };
             Ok(speed)
         })
     }
 
-    pub fn current_voltage(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
+    pub fn current_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let voltage = device.current_voltage().read()?.voltage();
-            Ok(voltage)
+            Ok(voltage as f32 * 0.1)
+        })
+    }
+
+    pub fn current_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
+        self.transaction(id, |device| {
+            let temp = device.current_temperature().read()?.temperature();
+            Ok(temp as f32)
         })
     }
 
@@ -174,6 +403,146 @@ where
             Ok(load)
         })
     }
+
+    pub fn action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
+        self.device.interface.action(id)
+    }
+
+    pub fn reg_write_raw(
+        &mut self,
+        id: u8,
+        address: u8,
+        data: &[u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.device.interface.reg_write(id, address, data)
+    }
+
+    pub fn reg_write_position(
+        &mut self,
+        id: u8,
+        position: u16,
+        time: u16,
+        speed: u16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut data = [0u8; 6];
+        let p = position.to_le_bytes();
+        let t = time.to_le_bytes();
+        let s = speed.to_le_bytes();
+        data[0] = p[0];
+        data[1] = p[1];
+        data[2] = t[0];
+        data[3] = t[1];
+        data[4] = s[0];
+        data[5] = s[1];
+
+        self.device.interface.reg_write(id, 0x2A, &data)
+    }
+
+    pub fn sync_write_raw(
+        &mut self,
+        address: u8,
+        data_len: u8,
+        payload: &[u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.device.interface.sync_write(address, data_len, payload)
+    }
+
+    pub fn sync_write_position(
+        &mut self,
+        moves: &[ScsPositionMove],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut payload = [0u8; 256];
+        let data_len = 6;
+        let mut offset = 0;
+
+        for m in moves {
+            if offset + 7 > payload.len() {
+                return Err(ProtocolError::InvalidLength);
+            }
+            payload[offset] = m.id;
+            let p = m.position.to_le_bytes();
+            let t = m.time.to_le_bytes();
+            let s = m.speed.to_le_bytes();
+            payload[offset + 1] = p[0];
+            payload[offset + 2] = p[1];
+            payload[offset + 3] = t[0];
+            payload[offset + 4] = t[1];
+            payload[offset + 5] = s[0];
+            payload[offset + 6] = s[1];
+            offset += 7;
+        }
+
+        self.device
+            .interface
+            .sync_write(0x2A, data_len, &payload[..offset])
+    }
+
+    pub fn sync_read_raw(
+        &mut self,
+        address: u8,
+        data_len: u8,
+        ids: &[u8],
+        output: &mut [u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.device
+            .interface
+            .sync_read(address, data_len, ids, output)
+    }
+
+    pub fn sync_read_state(
+        &mut self,
+        ids: &[u8],
+        states: &mut [ScsServoState],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if states.len() < ids.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+
+        let address = 0x38;
+        let data_len = 8;
+        let mut output = [0u8; 256];
+        let total_len = ids.len() * data_len as usize;
+        if total_len > output.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
+
+        self.device
+            .interface
+            .sync_read(address, data_len, ids, &mut output[..total_len])?;
+
+        for (i, &id) in ids.iter().enumerate() {
+            let start = i * data_len as usize;
+            let chunk = &output[start..start + data_len as usize];
+
+            let position = u16::from_le_bytes([chunk[0], chunk[1]]);
+            let speed_raw = u16::from_le_bytes([chunk[2], chunk[3]]);
+            let load_raw = u16::from_le_bytes([chunk[4], chunk[5]]);
+            let voltage_raw = chunk[6];
+            let temp_raw = chunk[7];
+
+            let speed = if speed_raw & 0x8000 != 0 {
+                -1.0 * (speed_raw & 0x7FFF) as f32
+            } else {
+                speed_raw as f32
+            };
+
+            let load = if load_raw & 0x4000 != 0 {
+                -1.0 * ((load_raw & 0x3FFF) as f32) * 0.1
+            } else {
+                (load_raw as f32) * 0.1
+            };
+
+            states[i] = ScsServoState {
+                id,
+                position,
+                speed,
+                load,
+                voltage: voltage_raw as f32 * 0.1,
+                temperature: temp_raw as f32,
+            };
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -184,10 +553,21 @@ mod tests {
     #[test]
     fn test_device_creation() {
         let mut bus = SCLBus::new(MockInterface { inner: () });
-        // Example usage
+        const ID: u8 = 1;
 
+        bus.set_angle_limits(ID, degrees_to_steps(0.0), degrees_to_steps(180.0))
+            .unwrap();
 
-        let x = bus.current_voltage(12).expect("ah");
+        bus.set_target_position(ID, degrees_to_steps(200.0)).unwrap();
+        bus.set_torque_mode(ID, TorqueMode::Enable).unwrap();
+
+        const NEW_ID: u8 = 2;
+        bus.set_id(ID, NEW_ID).unwrap();
+
+        bus.inner_mut().read_all_registers(|a,b,c| {
+            
+        }).expect("TODO: panic message");
+
 
     }
 }

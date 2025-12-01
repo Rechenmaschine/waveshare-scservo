@@ -34,7 +34,7 @@ impl<I> device_driver::RegisterInterface for MockInterface<I> {
         _size_bits: u32,
         _data: &[u8],
     ) -> Result<(), Self::Error> {
-        todo!("")
+        todo!()
     }
 
     fn read_register(
