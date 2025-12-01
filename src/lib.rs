@@ -1,8 +1,10 @@
 #![no_std]
+#![warn(clippy::pedantic)]
 use crate::registers::{BaudRate, SclInternal, TorqueMode};
 use crate::uart::{UartBusInterface, VersionInformation};
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 
+#[cfg(test)]
 mod mock;
 mod registers;
 mod uart;
@@ -12,11 +14,16 @@ pub const RESOLUTION_STEPS: u16 = 1024;
 /// Maximum effective angle in degrees
 pub const MAX_ANGLE_DEGREES: f32 = 220.0;
 /// Minimum resolution angle (degrees per step)
-pub const DEGREES_PER_STEP: f32 = 0.21484375;
+pub const DEGREES_PER_STEP: f32 = 0.214_843_75;
 /// No-load speed in steps per second
 pub const NO_LOAD_SPEED_STEPS_PER_SEC: u16 = 1500;
 /// No-load speed in RPM
 pub const NO_LOAD_SPEED_RPM: u16 = 54;
+
+/// Broadcast ID (0xFE)
+pub const BROADCAST_ID: u8 = 0xFE;
+/// Default Servo ID (1)
+pub const DEFAULT_ID: u8 = 1;
 
 /// Maximum position value (steps)
 pub const MAX_POSITION_STEPS: u16 = 1023;
@@ -35,10 +42,15 @@ const BIT_15_VALUE: u16 = 0x7FFF;
 const BIT_14_SIGN: u16 = 0x4000;
 const BIT_14_VALUE: u16 = 0x3FFF;
 
+#[must_use]
 pub const fn degrees_to_steps(degrees: f32) -> u16 {
-    (degrees / DEGREES_PER_STEP) as u16
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (degrees / DEGREES_PER_STEP) as u16
+    }
 }
 
+#[must_use]
 pub const fn steps_to_degrees(steps: u16) -> f32 {
     steps as f32 * DEGREES_PER_STEP
 }
@@ -127,6 +139,10 @@ where
         Ok(r)
     }
 
+    /// Read version information from the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let servo_major = device.servo_major_version().read()?.version_number();
@@ -135,14 +151,18 @@ where
             let firmware_minor = device.fw_minor_version().read()?.version_number();
 
             Ok(VersionInformation {
-                firmware_major_version: firmware_major,
-                firmware_minor_version: firmware_minor,
-                servo_major_version: servo_major,
-                servo_minor_version: servo_minor,
+                firmware_major,
+                firmware_minor,
+                servo_major,
+                servo_minor,
             })
         })
     }
 
+    /// Set the ID of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_id(&mut self, current_id: u8, new_id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.transaction(current_id, |device| {
             device.lock_flag().write(|w| w.set_locked(false))?;
@@ -152,6 +172,10 @@ where
         })
     }
 
+    /// Set the baudrate of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_baudrate(
         &mut self,
         id: u8,
@@ -165,14 +189,30 @@ where
         })
     }
 
+    /// Reset the servo to factory defaults.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.reset(id)
     }
 
+    /// Ping the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
+        if id == BROADCAST_ID {
+            return Err(ProtocolError::InvalidId);
+        }
+
         self.device.interface.ping(id)
     }
 
+    /// Set the torque mode of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the mode is invalid.
     pub fn set_torque_mode(
         &mut self,
         id: u8,
@@ -187,6 +227,10 @@ where
         })
     }
 
+    /// Set the angle limits of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the limits are invalid.
     pub fn set_angle_limits(
         &mut self,
         id: u8,
@@ -209,13 +253,19 @@ where
         })
     }
 
+    /// Set the voltage limits of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_voltage_limits(
         &mut self,
         id: u8,
         min_volts: f32,
         max_volts: f32,
     ) -> Result<(), ProtocolError<I::Error>> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let min_val = (min_volts / VOLTAGE_UNIT) as u8;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let max_val = (max_volts / VOLTAGE_UNIT) as u8;
 
         self.transaction(id, |device| {
@@ -231,11 +281,16 @@ where
         })
     }
 
+    /// Set the maximum temperature limit of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_max_temperature_limit(
         &mut self,
         id: u8,
         max_temp_celsius: f32,
     ) -> Result<(), ProtocolError<I::Error>> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let val = max_temp_celsius as u8;
         self.transaction(id, |device| {
             device.lock_flag().write(|w| w.set_locked(false))?;
@@ -247,11 +302,16 @@ where
         })
     }
 
+    /// Set the maximum torque of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the value is invalid.
     pub fn set_max_torque(
         &mut self,
         id: u8,
         max_torque_percent: f32,
     ) -> Result<(), ProtocolError<I::Error>> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let val = (max_torque_percent / TORQUE_UNIT) as u16;
         if val > MAX_TORQUE_VALUE {
             return Err(ProtocolError::InvalidSetting);
@@ -264,6 +324,10 @@ where
         })
     }
 
+    /// Set the PID coefficients of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_pid_coefficients(
         &mut self,
         id: u8,
@@ -281,6 +345,10 @@ where
         })
     }
 
+    /// Set the protection configuration of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_protection_config(
         &mut self,
         id: u8,
@@ -303,6 +371,10 @@ where
         })
     }
 
+    /// Set the alarm LED configuration of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_alarm_led(
         &mut self,
         id: u8,
@@ -322,6 +394,10 @@ where
         })
     }
 
+    /// Set the alarm shutdown configuration of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn set_alarm_shutdown(
         &mut self,
         id: u8,
@@ -341,6 +417,10 @@ where
         })
     }
 
+    /// Read the status of the servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn read_status(&mut self, id: u8) -> Result<ScsStatus, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let status = device.servo_status().read()?;
@@ -352,6 +432,10 @@ where
         })
     }
 
+    /// Check if the servo is moving.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn is_moving(&mut self, id: u8) -> Result<bool, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let moving = device.move_flag().read()?.flag();
@@ -364,6 +448,9 @@ where
     /// # Arguments
     /// * `id` - The ID of the servo.
     /// * `steps` - The target position in steps (0-1023).
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the position is invalid.
     pub fn set_target_position(
         &mut self,
         id: u8,
@@ -381,6 +468,9 @@ where
     /// Get the current position of the servo.
     ///
     /// Returns the position in steps (0-1023).
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn current_position_steps(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let pos = device.current_position().read()?.position();
@@ -392,13 +482,16 @@ where
     ///
     /// Returns the speed in steps/s.
     /// Positive values indicate forward rotation, negative values indicate reverse rotation.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn current_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let speed_raw = device.current_speed().read()?.speed();
             let speed = if speed_raw & BIT_15_SIGN != 0 {
-                -1.0 * (speed_raw & BIT_15_VALUE) as f32
+                -f32::from(speed_raw & BIT_15_VALUE)
             } else {
-                speed_raw as f32
+                f32::from(speed_raw)
             };
             Ok(speed)
         })
@@ -407,20 +500,26 @@ where
     /// Get the current input voltage of the servo.
     ///
     /// Returns the voltage in Volts.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn current_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let voltage = device.current_voltage().read()?.voltage();
-            Ok(voltage as f32 * VOLTAGE_UNIT)
+            Ok(f32::from(voltage) * VOLTAGE_UNIT)
         })
     }
 
     /// Get the current temperature of the servo.
     ///
     /// Returns the temperature in degrees Celsius.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn current_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let temp = device.current_temperature().read()?.temperature();
-            Ok(temp as f32)
+            Ok(f32::from(temp))
         })
     }
 
@@ -428,16 +527,19 @@ where
     ///
     /// Returns the load as a percentage of maximum torque (0.0 - 100.0).
     /// Positive values indicate forward load, negative values indicate reverse load.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn current_load(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let load_raw = device.current_load().read()?.load();
 
             let load = if load_raw & BIT_14_SIGN != 0 {
                 // Negative load
-                -1.0 * ((load_raw & BIT_14_VALUE) as f32) * TORQUE_UNIT
+                -f32::from(load_raw & BIT_14_VALUE) * TORQUE_UNIT
             } else {
                 // Positive load
-                (load_raw as f32) * TORQUE_UNIT
+                f32::from(load_raw) * TORQUE_UNIT
             };
             Ok(load)
         })
@@ -446,6 +548,9 @@ where
     /// Trigger the action for registered instructions.
     ///
     /// This command is used to execute instructions that were sent with `reg_write`.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.action(id)
     }
@@ -453,6 +558,9 @@ where
     /// Write to a register asynchronously.
     ///
     /// The instruction is registered but not executed until an `action` command is received.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn reg_write_raw(
         &mut self,
         id: u8,
@@ -471,6 +579,9 @@ where
     /// * `position` - Target position in steps.
     /// * `time` - Movement time in ms (0 means use speed).
     /// * `speed` - Movement speed in steps/s (0 means use time).
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn reg_write_position(
         &mut self,
         id: u8,
@@ -498,6 +609,9 @@ where
     /// * `address` - The starting register address.
     /// * `data_len` - The length of data per servo.
     /// * `payload` - The concatenated data for all servos (ID + Data).
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn sync_write_raw(
         &mut self,
         address: u8,
@@ -511,6 +625,9 @@ where
     ///
     /// # Arguments
     /// * `moves` - A slice of `ScsPositionMove` structs defining the movement for each servo.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the payload is too large.
     pub fn sync_write_position(
         &mut self,
         moves: &[ScsPositionMove],
@@ -548,6 +665,9 @@ where
     /// * `data_len` - The length of data to read per servo.
     /// * `ids` - The IDs of the servos to read from.
     /// * `output` - Buffer to store the read data.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
     pub fn sync_read_raw(
         &mut self,
         address: u8,
@@ -567,6 +687,9 @@ where
     /// # Arguments
     /// * `ids` - The IDs of the servos to read from.
     /// * `states` - Buffer to store the parsed state for each servo. Must be at least as long as `ids`.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails or the buffer is too small.
     pub fn sync_read_state(
         &mut self,
         ids: &[u8],
@@ -599,15 +722,15 @@ where
             let temp_raw = chunk[7];
 
             let speed = if speed_raw & BIT_15_SIGN != 0 {
-                -1.0 * (speed_raw & BIT_15_VALUE) as f32
+                -f32::from(speed_raw & BIT_15_VALUE)
             } else {
-                speed_raw as f32
+                f32::from(speed_raw)
             };
 
             let load = if load_raw & BIT_14_SIGN != 0 {
-                -1.0 * ((load_raw & BIT_14_VALUE) as f32) * TORQUE_UNIT
+                -f32::from(load_raw & BIT_14_VALUE) * TORQUE_UNIT
             } else {
-                (load_raw as f32) * TORQUE_UNIT
+                f32::from(load_raw) * TORQUE_UNIT
             };
 
             states[i] = ScsServoState {
@@ -615,8 +738,8 @@ where
                 position,
                 speed,
                 load,
-                voltage: voltage_raw as f32 * VOLTAGE_UNIT,
-                temperature: temp_raw as f32,
+                voltage: f32::from(voltage_raw) * VOLTAGE_UNIT,
+                temperature: f32::from(temp_raw),
             };
         }
         Ok(())
@@ -642,7 +765,7 @@ mod tests {
         const NEW_ID: u8 = 2;
         bus.set_id(ID, NEW_ID).unwrap();
 
-        bus.inner_mut().read_all_registers(|a,b,c| {
+        bus.inner_mut().read_all_registers(|_a,_b,_c| {
             
         }).expect("TODO: panic message");
 

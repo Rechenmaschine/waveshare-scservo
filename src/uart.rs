@@ -2,7 +2,6 @@ use crate::{Instruction, ProtocolError};
 use device_driver::RegisterInterface;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 
-const BROADCAST_ID: u8 = 0xFE;
 const HEADER_BYTE: u8 = 0xFF;
 
 pub struct UartBusInterface<I> {
@@ -14,10 +13,10 @@ pub struct UartBusInterface<I> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct VersionInformation{
-    pub firmware_major_version: u8,
-    pub firmware_minor_version: u8,
-    pub servo_major_version: u8,
-    pub servo_minor_version: u8,
+    pub firmware_major: u8,
+    pub firmware_minor: u8,
+    pub servo_major: u8,
+    pub servo_minor: u8,
 }
 
 
@@ -31,7 +30,7 @@ where
     }
 
     pub fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
-        if id == BROADCAST_ID {
+        if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
         }
 
@@ -63,10 +62,10 @@ where
             return Err(ProtocolError::InvalidLength);
         }
         params[0] = address;
-        params[1..1 + data.len()].copy_from_slice(data);
+        params[1..=data.len()].copy_from_slice(data);
 
         let mut response = [];
-        self.transfer(id, Instruction::RegWrite, &params[..1 + data.len()], &mut response)?;
+        self.transfer(id, Instruction::RegWrite, &params[..=data.len()], &mut response)?;
         Ok(())
     }
 
@@ -85,7 +84,7 @@ where
         params[2..2 + payload.len()].copy_from_slice(payload);
 
         let mut response = [];
-        self.transfer(BROADCAST_ID, Instruction::SyncWrite, &params[..2 + payload.len()], &mut response)?;
+        self.transfer(crate::BROADCAST_ID, Instruction::SyncWrite, &params[..2 + payload.len()], &mut response)?;
         Ok(())
     }
 
@@ -105,8 +104,8 @@ where
         params[2..2 + ids.len()].copy_from_slice(ids);
 
         let param_slice = &params[..2 + ids.len()];
-        let length = (param_slice.len() + 2) as u8;
-        let id = BROADCAST_ID;
+        let length = u8::try_from(param_slice.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
+        let id = crate::BROADCAST_ID;
         let instruction = Instruction::SyncRead;
 
         let checksum = Self::calculate_checksum(id, length, instruction as u8, param_slice);
@@ -136,10 +135,11 @@ where
     }
 
     fn calculate_checksum(id: u8, length: u8, instruction: u8, params: &[u8]) -> u8 {
-        let mut sum: u32 = id as u32 + length as u32 + instruction as u32;
+        let mut sum: u32 = u32::from(id) + u32::from(length) + u32::from(instruction);
         for &p in params {
-            sum += p as u32;
+            sum += u32::from(p);
         }
+        #[allow(clippy::cast_possible_truncation)]
         !(sum as u8)
     }
 
@@ -205,10 +205,11 @@ where
 
         // Verify Checksum
         // Checksum = ~(ID + Length + Error + Params...)
-        let mut sum: u32 = received_id as u32 + length as u32;
+        let mut sum: u32 = u32::from(received_id) + u32::from(length);
         for &b in &body[..body_len - 1] {
-            sum += b as u32;
+            sum += u32::from(b);
         }
+        #[allow(clippy::cast_possible_truncation)]
         let calculated_checksum = !(sum as u8);
 
         if calculated_checksum != received_checksum {
@@ -236,7 +237,7 @@ where
         params: &[u8],
         response_buf: &mut [u8],
     ) -> Result<usize, ProtocolError<I::Error>> {
-        let length = (params.len() + 2) as u8;
+        let length = u8::try_from(params.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
         let checksum = Self::calculate_checksum(id, length, instruction as u8, params);
         let header = [HEADER_BYTE, HEADER_BYTE, id, length, instruction as u8];
 
@@ -251,7 +252,7 @@ where
             .map_err(ProtocolError::Serial)?;
 
         // If broadcast ID (0xFE), usually no response, except PING (0x01) is not allowed for broadcast.
-        if id == BROADCAST_ID {
+        if id == crate::BROADCAST_ID {
             return Ok(0);
         }
 
@@ -278,10 +279,10 @@ where
             return Err(ProtocolError::InvalidLength);
         }
         params[0] = address;
-        params[1..1 + data.len()].copy_from_slice(data);
+        params[1..=data.len()].copy_from_slice(data);
 
         let mut response = [];
-        self.transfer(self.id.unwrap(), Instruction::Write, &params[..1 + data.len()], &mut response)?;
+        self.transfer(self.id.unwrap(), Instruction::Write, &params[..=data.len()], &mut response)?;
         Ok(())
     }
 
@@ -291,7 +292,7 @@ where
         _size_bits: u32,
         data: &mut [u8],
     ) -> Result<(), Self::Error> {
-        let len = data.len() as u8;
+        let len = u8::try_from(data.len()).map_err(|_| ProtocolError::InvalidLength)?;
         let params = [address, len];
         self.transfer(self.id.unwrap(), Instruction::Read, &params, data)?;
         Ok(())
