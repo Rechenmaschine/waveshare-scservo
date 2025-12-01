@@ -2,6 +2,9 @@ use crate::{Instruction, ProtocolError};
 use device_driver::RegisterInterface;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 
+const BROADCAST_ID: u8 = 0xFE;
+const HEADER_BYTE: u8 = 0xFF;
+
 pub struct UartBusInterface<I> {
     interface: I,
     id: Option<u8>,
@@ -28,7 +31,7 @@ where
     }
 
     pub fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
-        if id == 0xFE {
+        if id == BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
         }
 
@@ -82,7 +85,7 @@ where
         params[2..2 + payload.len()].copy_from_slice(payload);
 
         let mut response = [];
-        self.transfer(0xFE, Instruction::SyncWrite, &params[..2 + payload.len()], &mut response)?;
+        self.transfer(BROADCAST_ID, Instruction::SyncWrite, &params[..2 + payload.len()], &mut response)?;
         Ok(())
     }
 
@@ -103,11 +106,11 @@ where
 
         let param_slice = &params[..2 + ids.len()];
         let length = (param_slice.len() + 2) as u8;
-        let id = 0xFE;
+        let id = BROADCAST_ID;
         let instruction = Instruction::SyncRead;
 
         let checksum = Self::calculate_checksum(id, length, instruction as u8, param_slice);
-        let header = [0xFF, 0xFF, id, length, instruction as u8];
+        let header = [HEADER_BYTE, HEADER_BYTE, id, length, instruction as u8];
 
         self.interface
             .write_all(&header)
@@ -168,9 +171,9 @@ where
         // 1. Scan for Header 0xFF 0xFF
         loop {
             let b = self.read_byte()?;
-            if b == 0xFF {
+            if b == HEADER_BYTE {
                 let b2 = self.read_byte()?;
-                if b2 == 0xFF {
+                if b2 == HEADER_BYTE {
                     break;
                 }
             }
@@ -235,7 +238,7 @@ where
     ) -> Result<usize, ProtocolError<I::Error>> {
         let length = (params.len() + 2) as u8;
         let checksum = Self::calculate_checksum(id, length, instruction as u8, params);
-        let header = [0xFF, 0xFF, id, length, instruction as u8];
+        let header = [HEADER_BYTE, HEADER_BYTE, id, length, instruction as u8];
 
         self.interface
             .write_all(&header)
@@ -248,7 +251,7 @@ where
             .map_err(ProtocolError::Serial)?;
 
         // If broadcast ID (0xFE), usually no response, except PING (0x01) is not allowed for broadcast.
-        if id == 0xFE {
+        if id == BROADCAST_ID {
             return Ok(0);
         }
 

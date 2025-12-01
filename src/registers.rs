@@ -325,11 +325,11 @@ device_driver::create_device!(
             const RESET_VALUE = 36;
 
             /// Voltage protection
-            VOLTAGE: bool = 0,
+            voltage: bool = 0,
             /// Temperature protection
-            TEMPERATURE: bool = 2,
+            temperature: bool = 2,
             /// Overload protection
-            OVERLOAD: bool = 5,
+            overload: bool = 5,
         },
 
         /// LED alarm condition
@@ -347,11 +347,11 @@ device_driver::create_device!(
             const RESET_VALUE = 37;
 
             /// Voltage alarm
-            VOLTAGE: bool = 0,
+            voltage: bool = 0,
             /// Temperature alarm
-            TEMPERATURE: bool = 2,
+            temperature: bool = 2,
             /// Overload alarm
-            OVERLOAD: bool = 5,
+            overload: bool = 5,
         },
 
         /// P (proportional) coefficient
@@ -786,11 +786,11 @@ device_driver::create_device!(
             const RESET_VALUE = 0;
 
             /// Voltage error
-            VOLTAGE: bool = 0,
+            voltage: bool = 0,
             /// Temperature error
-            TEMPERATURE: bool = 2,
+            temperature: bool = 2,
             /// Overload error
-            OVERLOAD: bool = 5,
+            overload: bool = 5,
         },
 
         /// Move flag
@@ -812,3 +812,5 @@ device_driver::create_device!(
         },
     }
 );
+pub const TARGET_POSITION_ADDR: u8 = 0x2A;
+pub const CURRENT_POSITION_ADDR: u8 = 0x38;

@@ -18,6 +18,23 @@ pub const NO_LOAD_SPEED_STEPS_PER_SEC: u16 = 1500;
 /// No-load speed in RPM
 pub const NO_LOAD_SPEED_RPM: u16 = 54;
 
+/// Maximum position value (steps)
+pub const MAX_POSITION_STEPS: u16 = 1023;
+/// Maximum torque value (0.1%)
+pub const MAX_TORQUE_VALUE: u16 = 1000;
+
+/// Voltage scaling factor (0.1V per unit)
+const VOLTAGE_UNIT: f32 = 0.1;
+/// Load/Torque scaling factor (0.1% per unit)
+const TORQUE_UNIT: f32 = 0.1;
+/// Protection time unit (40ms per unit)
+const PROTECTION_TIME_UNIT_MS: u16 = 40;
+
+const BIT_15_SIGN: u16 = 0x8000;
+const BIT_15_VALUE: u16 = 0x7FFF;
+const BIT_14_SIGN: u16 = 0x4000;
+const BIT_14_VALUE: u16 = 0x3FFF;
+
 pub const fn degrees_to_steps(degrees: f32) -> u16 {
     (degrees / DEGREES_PER_STEP) as u16
 }
@@ -176,7 +193,7 @@ where
         min_angle_steps: u16,
         max_angle_steps: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        if min_angle_steps > 1023 || max_angle_steps > 1023 || min_angle_steps > max_angle_steps {
+        if min_angle_steps > MAX_POSITION_STEPS || max_angle_steps > MAX_POSITION_STEPS || min_angle_steps > max_angle_steps {
             return Err(ProtocolError::InvalidSetting);
         }
         self.transaction(id, |device| {
@@ -198,8 +215,8 @@ where
         min_volts: f32,
         max_volts: f32,
     ) -> Result<(), ProtocolError<I::Error>> {
-        let min_val = (min_volts * 10.0) as u8;
-        let max_val = (max_volts * 10.0) as u8;
+        let min_val = (min_volts / VOLTAGE_UNIT) as u8;
+        let max_val = (max_volts / VOLTAGE_UNIT) as u8;
 
         self.transaction(id, |device| {
             device.lock_flag().write(|w| w.set_locked(false))?;
@@ -235,8 +252,8 @@ where
         id: u8,
         max_torque_percent: f32,
     ) -> Result<(), ProtocolError<I::Error>> {
-        let val = (max_torque_percent * 10.0) as u16;
-        if val > 1000 {
+        let val = (max_torque_percent / TORQUE_UNIT) as u16;
+        if val > MAX_TORQUE_VALUE {
             return Err(ProtocolError::InvalidSetting);
         }
         self.transaction(id, |device| {
@@ -271,7 +288,7 @@ where
         protection_time_ms: u16,
         overload_torque_percent: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
-        let time_val = (protection_time_ms / 40).min(254) as u8;
+        let time_val = (protection_time_ms / PROTECTION_TIME_UNIT_MS).min(254) as u8;
         self.transaction(id, |device| {
             device.lock_flag().write(|w| w.set_locked(false))?;
             device
@@ -342,12 +359,17 @@ where
         })
     }
 
+    /// Set the target position of the servo.
+    ///
+    /// # Arguments
+    /// * `id` - The ID of the servo.
+    /// * `steps` - The target position in steps (0-1023).
     pub fn set_target_position(
         &mut self,
         id: u8,
         steps: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        if steps > 1023 {
+        if steps > MAX_POSITION_STEPS {
             return Err(ProtocolError::InvalidSetting);
         }
         self.transaction(id, |device| {
@@ -356,6 +378,9 @@ where
         })
     }
 
+    /// Get the current position of the servo.
+    ///
+    /// Returns the position in steps (0-1023).
     pub fn current_position_steps(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let pos = device.current_position().read()?.position();
@@ -363,11 +388,15 @@ where
         })
     }
 
+    /// Get the current speed of the servo.
+    ///
+    /// Returns the speed in steps/s.
+    /// Positive values indicate forward rotation, negative values indicate reverse rotation.
     pub fn current_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let speed_raw = device.current_speed().read()?.speed();
-            let speed = if speed_raw & 0x8000 != 0 {
-                -1.0 * (speed_raw & 0x7FFF) as f32
+            let speed = if speed_raw & BIT_15_SIGN != 0 {
+                -1.0 * (speed_raw & BIT_15_VALUE) as f32
             } else {
                 speed_raw as f32
             };
@@ -375,13 +404,19 @@ where
         })
     }
 
+    /// Get the current input voltage of the servo.
+    ///
+    /// Returns the voltage in Volts.
     pub fn current_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let voltage = device.current_voltage().read()?.voltage();
-            Ok(voltage as f32 * 0.1)
+            Ok(voltage as f32 * VOLTAGE_UNIT)
         })
     }
 
+    /// Get the current temperature of the servo.
+    ///
+    /// Returns the temperature in degrees Celsius.
     pub fn current_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let temp = device.current_temperature().read()?.temperature();
@@ -389,25 +424,35 @@ where
         })
     }
 
+    /// Get the current load of the servo.
+    ///
+    /// Returns the load as a percentage of maximum torque (0.0 - 100.0).
+    /// Positive values indicate forward load, negative values indicate reverse load.
     pub fn current_load(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         self.transaction(id, |device| {
             let load_raw = device.current_load().read()?.load();
 
-            let load = if load_raw & 0x4000 != 0 {
+            let load = if load_raw & BIT_14_SIGN != 0 {
                 // Negative load
-                -1.0 * ((load_raw & 0x3FFF) as f32) * 0.1
+                -1.0 * ((load_raw & BIT_14_VALUE) as f32) * TORQUE_UNIT
             } else {
                 // Positive load
-                (load_raw as f32) * 0.1
+                (load_raw as f32) * TORQUE_UNIT
             };
             Ok(load)
         })
     }
 
+    /// Trigger the action for registered instructions.
+    ///
+    /// This command is used to execute instructions that were sent with `reg_write`.
     pub fn action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.action(id)
     }
 
+    /// Write to a register asynchronously.
+    ///
+    /// The instruction is registered but not executed until an `action` command is received.
     pub fn reg_write_raw(
         &mut self,
         id: u8,
@@ -417,6 +462,15 @@ where
         self.device.interface.reg_write(id, address, data)
     }
 
+    /// Set the target position, time, and speed asynchronously.
+    ///
+    /// The instruction is registered but not executed until an `action` command is received.
+    ///
+    /// # Arguments
+    /// * `id` - The ID of the servo.
+    /// * `position` - Target position in steps.
+    /// * `time` - Movement time in ms (0 means use speed).
+    /// * `speed` - Movement speed in steps/s (0 means use time).
     pub fn reg_write_position(
         &mut self,
         id: u8,
@@ -435,9 +489,15 @@ where
         data[4] = s[0];
         data[5] = s[1];
 
-        self.device.interface.reg_write(id, 0x2A, &data)
+        self.device.interface.reg_write(id, crate::registers::TARGET_POSITION_ADDR, &data)
     }
 
+    /// Write to multiple servos simultaneously.
+    ///
+    /// # Arguments
+    /// * `address` - The starting register address.
+    /// * `data_len` - The length of data per servo.
+    /// * `payload` - The concatenated data for all servos (ID + Data).
     pub fn sync_write_raw(
         &mut self,
         address: u8,
@@ -447,6 +507,10 @@ where
         self.device.interface.sync_write(address, data_len, payload)
     }
 
+    /// Move multiple servos simultaneously.
+    ///
+    /// # Arguments
+    /// * `moves` - A slice of `ScsPositionMove` structs defining the movement for each servo.
     pub fn sync_write_position(
         &mut self,
         moves: &[ScsPositionMove],
@@ -474,9 +538,16 @@ where
 
         self.device
             .interface
-            .sync_write(0x2A, data_len, &payload[..offset])
+            .sync_write(crate::registers::TARGET_POSITION_ADDR, data_len, &payload[..offset])
     }
 
+    /// Read from multiple servos simultaneously.
+    ///
+    /// # Arguments
+    /// * `address` - The starting register address.
+    /// * `data_len` - The length of data to read per servo.
+    /// * `ids` - The IDs of the servos to read from.
+    /// * `output` - Buffer to store the read data.
     pub fn sync_read_raw(
         &mut self,
         address: u8,
@@ -489,6 +560,13 @@ where
             .sync_read(address, data_len, ids, output)
     }
 
+    /// Read the state of multiple servos simultaneously.
+    ///
+    /// Reads position, speed, load, voltage, and temperature.
+    ///
+    /// # Arguments
+    /// * `ids` - The IDs of the servos to read from.
+    /// * `states` - Buffer to store the parsed state for each servo. Must be at least as long as `ids`.
     pub fn sync_read_state(
         &mut self,
         ids: &[u8],
@@ -498,7 +576,7 @@ where
             return Err(ProtocolError::InvalidLength);
         }
 
-        let address = 0x38;
+        let address = crate::registers::CURRENT_POSITION_ADDR;
         let data_len = 8;
         let mut output = [0u8; 256];
         let total_len = ids.len() * data_len as usize;
@@ -520,16 +598,16 @@ where
             let voltage_raw = chunk[6];
             let temp_raw = chunk[7];
 
-            let speed = if speed_raw & 0x8000 != 0 {
-                -1.0 * (speed_raw & 0x7FFF) as f32
+            let speed = if speed_raw & BIT_15_SIGN != 0 {
+                -1.0 * (speed_raw & BIT_15_VALUE) as f32
             } else {
                 speed_raw as f32
             };
 
-            let load = if load_raw & 0x4000 != 0 {
-                -1.0 * ((load_raw & 0x3FFF) as f32) * 0.1
+            let load = if load_raw & BIT_14_SIGN != 0 {
+                -1.0 * ((load_raw & BIT_14_VALUE) as f32) * TORQUE_UNIT
             } else {
-                (load_raw as f32) * 0.1
+                (load_raw as f32) * TORQUE_UNIT
             };
 
             states[i] = ScsServoState {
@@ -537,7 +615,7 @@ where
                 position,
                 speed,
                 load,
-                voltage: voltage_raw as f32 * 0.1,
+                voltage: voltage_raw as f32 * VOLTAGE_UNIT,
                 temperature: temp_raw as f32,
             };
         }
