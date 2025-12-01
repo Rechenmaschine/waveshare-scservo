@@ -99,7 +99,7 @@ pub struct ScsStatus {
     pub overload_error: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScsServoState {
     pub id: u8,
@@ -205,7 +205,6 @@ where
         if id == BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
         }
-
         self.device.interface.ping(id)
     }
 
@@ -237,7 +236,10 @@ where
         min_angle_steps: u16,
         max_angle_steps: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        if min_angle_steps > MAX_POSITION_STEPS || max_angle_steps > MAX_POSITION_STEPS || min_angle_steps > max_angle_steps {
+        if min_angle_steps > MAX_POSITION_STEPS
+            || max_angle_steps > MAX_POSITION_STEPS
+            || min_angle_steps > max_angle_steps
+        {
             return Err(ProtocolError::InvalidSetting);
         }
         self.transaction(id, |device| {
@@ -561,11 +563,11 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub fn reg_write_raw(
+    pub fn reg_write_raw<const SIZE: usize>(
         &mut self,
         id: u8,
         address: u8,
-        data: &[u8],
+        data: &[u8; SIZE],
     ) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.reg_write(id, address, data)
     }
@@ -600,7 +602,9 @@ where
         data[4] = s[0];
         data[5] = s[1];
 
-        self.device.interface.reg_write(id, crate::registers::TARGET_POSITION_ADDR, &data)
+        self.device
+            .interface
+            .reg_write(id, registers::TARGET_POSITION_ADDR, &data)
     }
 
     /// Write to multiple servos simultaneously.
@@ -612,11 +616,11 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub fn sync_write_raw(
+    pub fn sync_write_raw<const SIZE: usize>(
         &mut self,
         address: u8,
         data_len: u8,
-        payload: &[u8],
+        payload: &[u8; SIZE],
     ) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.sync_write(address, data_len, payload)
     }
@@ -628,9 +632,9 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails or the payload is too large.
-    pub fn sync_write_position(
+    pub fn sync_write_position<const SIZE: usize>(
         &mut self,
-        moves: &[ScsPositionMove],
+        moves: &[ScsPositionMove; SIZE],
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let data_len = 6;
@@ -653,31 +657,35 @@ where
             offset += 7;
         }
 
-        self.device
-            .interface
-            .sync_write(crate::registers::TARGET_POSITION_ADDR, data_len, &payload[..offset])
+        self.device.interface.sync_write(
+            registers::TARGET_POSITION_ADDR,
+            data_len,
+            &payload[..offset],
+        )
     }
 
     /// Read from multiple servos simultaneously.
     ///
     /// # Arguments
     /// * `address` - The starting register address.
-    /// * `data_len` - The length of data to read per servo.
     /// * `ids` - The IDs of the servos to read from.
-    /// * `output` - Buffer to store the read data.
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub fn sync_read_raw(
+    pub fn sync_read_raw<const NUM_SERVOS: usize, const DATA_LEN: usize>(
         &mut self,
         address: u8,
-        data_len: u8,
-        ids: &[u8],
-        output: &mut [u8],
-    ) -> Result<(), ProtocolError<I::Error>> {
+        ids: &[u8; NUM_SERVOS],
+    ) -> Result<[[u8; DATA_LEN]; NUM_SERVOS], ProtocolError<I::Error>> {
         self.device
             .interface
-            .sync_read(address, data_len, ids, output)
+            .send_sync_read_request(address, DATA_LEN as u8, ids)?;
+
+        let mut result = [[0u8; DATA_LEN]; NUM_SERVOS];
+        for (i, id) in ids.iter().enumerate() {
+            self.device.interface.read_response(*id, &mut result[i])?;
+        }
+        Ok(result)
     }
 
     /// Read the state of multiple servos simultaneously.
@@ -686,26 +694,22 @@ where
     ///
     /// # Arguments
     /// * `ids` - The IDs of the servos to read from.
-    /// * `states` - Buffer to store the parsed state for each servo. Must be at least as long as `ids`.
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails or the buffer is too small.
-    pub fn sync_read_state(
+    pub fn sync_read_state<const SIZE: usize>(
         &mut self,
-        ids: &[u8],
-        states: &mut [ScsServoState],
-    ) -> Result<(), ProtocolError<I::Error>> {
-        if states.len() < ids.len() {
-            return Err(ProtocolError::InvalidLength);
-        }
-
-        let address = crate::registers::CURRENT_POSITION_ADDR;
+        ids: &[u8; SIZE],
+    ) -> Result<[ScsServoState; SIZE], ProtocolError<I::Error>> {
+        let address = registers::CURRENT_POSITION_ADDR;
         let data_len = 8;
         let mut output = [0u8; 256];
         let total_len = ids.len() * data_len as usize;
         if total_len > output.len() {
             return Err(ProtocolError::InvalidLength);
         }
+
+        let mut states = [ScsServoState::default(); SIZE];
 
         self.device
             .interface
@@ -742,7 +746,7 @@ where
                 temperature: f32::from(temp_raw),
             };
         }
-        Ok(())
+        Ok(states)
     }
 }
 
@@ -756,19 +760,24 @@ mod tests {
         let mut bus = SCLBus::new(MockInterface { inner: () });
         const ID: u8 = 1;
 
+        bus.set_id(BROADCAST_ID, NEW_ID).unwrap();
+        bus.set_baudrate(ID, BaudRate::Baud1000000).unwrap();
+
         bus.set_angle_limits(ID, degrees_to_steps(0.0), degrees_to_steps(180.0))
             .unwrap();
-
-        bus.set_target_position(ID, degrees_to_steps(200.0)).unwrap();
+        bus.set_target_position(ID, degrees_to_steps(200.0))
+            .unwrap();
         bus.set_torque_mode(ID, TorqueMode::Enable).unwrap();
 
         const NEW_ID: u8 = 2;
-        bus.set_id(ID, NEW_ID).unwrap();
 
-        bus.inner_mut().read_all_registers(|_a,_b,_c| {
-            
-        }).expect("TODO: panic message");
+        bus.inner_mut()
+            .read_all_registers(|_, _, _| {})
+            .expect("TODO: panic message");
 
+        let ids = [1u8, 2u8, 3u8];
+        let _x = bus.sync_read_state(&ids).unwrap();
 
+        let _raw_data: [[u8; 8]; 3] = bus.sync_read_raw(registers::CURRENT_POSITION_ADDR, &ids).unwrap();
     }
 }

@@ -88,12 +88,11 @@ where
         Ok(())
     }
 
-    pub fn sync_read(
+    pub fn send_sync_read_request(
         &mut self,
         address: u8,
         data_len: u8,
         ids: &[u8],
-        output: &mut [u8],
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut params = [0u8; 256];
         if 2 + ids.len() > params.len() {
@@ -120,6 +119,17 @@ where
         self.interface
             .write_all(&[checksum])
             .map_err(ProtocolError::Serial)?;
+        Ok(())
+    }
+
+    pub fn sync_read(
+        &mut self,
+        address: u8,
+        data_len: u8,
+        ids: &[u8],
+        output: &mut [u8],
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.send_sync_read_request(address, data_len, ids)?;
 
         if output.len() < ids.len() * data_len as usize {
             return Err(ProtocolError::InvalidLength);
@@ -135,7 +145,7 @@ where
     }
 
     fn calculate_checksum(id: u8, length: u8, instruction: u8, params: &[u8]) -> u8 {
-        let mut sum: u32 = u32::from(id) + u32::from(length) + u32::from(instruction);
+        let mut sum = u32::from(id) + u32::from(length) + u32::from(instruction);
         for &p in params {
             sum += u32::from(p);
         }
@@ -163,7 +173,7 @@ where
         self.id = None;
     }
 
-    fn read_response(
+    pub fn read_response(
         &mut self,
         expected_id: u8,
         response_buf: &mut [u8],
@@ -205,7 +215,7 @@ where
 
         // Verify Checksum
         // Checksum = ~(ID + Length + Error + Params...)
-        let mut sum: u32 = u32::from(received_id) + u32::from(length);
+        let mut sum = u32::from(received_id) + u32::from(length);
         for &b in &body[..body_len - 1] {
             sum += u32::from(b);
         }
