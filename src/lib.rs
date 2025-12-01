@@ -1,4 +1,4 @@
-use crate::registers::{BaudRate, SclInternal, TorqueMode, TorqueSwitch};
+use crate::registers::{BaudRate, SclInternal, TorqueMode};
 use crate::uart::{UartBusInterface, VersionInformation};
 use device_driver::RegisterInterface;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};

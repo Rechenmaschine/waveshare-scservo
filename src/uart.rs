@@ -185,7 +185,7 @@ where
         params[1..1 + data.len()].copy_from_slice(data);
 
         let mut response = [];
-        self.transfer(self.id, Instruction::Write, &params[..1 + data.len()], &mut response)?;
+        self.transfer(self.id.unwrap(), Instruction::Write, &params[..1 + data.len()], &mut response)?;
         Ok(())
     }
 
@@ -197,7 +197,7 @@ where
     ) -> Result<(), Self::Error> {
         let len = data.len() as u8;
         let params = [address, len];
-        self.transfer(self.id, Instruction::Read, &params, data)?;
+        self.transfer(self.id.unwrap(), Instruction::Read, &params, data)?;
         Ok(())
     }
 }
