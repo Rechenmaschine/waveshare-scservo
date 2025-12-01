@@ -592,9 +592,9 @@ where
         speed: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut data = [0u8; 6];
-        let p = position.to_le_bytes();
-        let t = time.to_le_bytes();
-        let s = speed.to_le_bytes();
+        let p = position.to_be_bytes();
+        let t = time.to_be_bytes();
+        let s = speed.to_be_bytes();
         data[0] = p[0];
         data[1] = p[1];
         data[2] = t[0];
@@ -645,9 +645,9 @@ where
                 return Err(ProtocolError::InvalidLength);
             }
             payload[offset] = m.id;
-            let p = m.position.to_le_bytes();
-            let t = m.time.to_le_bytes();
-            let s = m.speed.to_le_bytes();
+            let p = m.position.to_be_bytes();
+            let t = m.time.to_be_bytes();
+            let s = m.speed.to_be_bytes();
             payload[offset + 1] = p[0];
             payload[offset + 2] = p[1];
             payload[offset + 3] = t[0];
@@ -719,9 +719,9 @@ where
             let start = i * data_len as usize;
             let chunk = &output[start..start + data_len as usize];
 
-            let position = u16::from_le_bytes([chunk[0], chunk[1]]);
-            let speed_raw = u16::from_le_bytes([chunk[2], chunk[3]]);
-            let load_raw = u16::from_le_bytes([chunk[4], chunk[5]]);
+            let position = u16::from_be_bytes([chunk[0], chunk[1]]);
+            let speed_raw = u16::from_be_bytes([chunk[2], chunk[3]]);
+            let load_raw = u16::from_be_bytes([chunk[4], chunk[5]]);
             let voltage_raw = chunk[6];
             let temp_raw = chunk[7];
 
