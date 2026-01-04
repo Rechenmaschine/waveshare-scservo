@@ -268,9 +268,9 @@ where
         new_id: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, current_id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.id().write(|w| w.set_id(new_id))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -284,9 +284,9 @@ where
         baudrate: BaudRate,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.baudrate().write(|w| w.set_baudrate(baudrate))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -343,14 +343,14 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device
             .minimum_angle()
             .write(|w| w.set_angle(min_angle_steps))?;
         device
             .maximum_angle()
             .write(|w| w.set_angle(max_angle_steps))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -370,14 +370,14 @@ where
         let max_val = (max_volts / VOLTAGE_UNIT) as u8;
 
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device
             .minimum_input_voltage()
             .write(|w| w.set_voltage(min_val))?;
         device
             .maximum_input_voltage()
             .write(|w| w.set_voltage(max_val))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -388,16 +388,15 @@ where
     pub fn blocking_set_max_temperature_limit(
         &mut self,
         id: u8,
-        max_temp_celsius: f32,
+        max_temp_celsius: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let val = max_temp_celsius as u8;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device
             .maximum_temperature()
-            .write(|w| w.set_temperature(val))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+            .write(|w| w.set_temperature(max_temp_celsius))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -416,9 +415,9 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.maximum_torque().write(|w| w.set_torque(val))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -434,11 +433,11 @@ where
         ki: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.p_coefficient().write(|w| w.set_coefficient(kp))?;
         device.d_coefficient().write(|w| w.set_coefficient(kd))?;
         device.i_coefficient().write(|w| w.set_coefficient(ki))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -455,7 +454,7 @@ where
     ) -> Result<(), ProtocolError<I::Error>> {
         let time_val = (protection_time_ms / PROTECTION_TIME_UNIT_MS).min(254) as u8;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device
             .protection_torque()
             .write(|w| w.set_torque(protection_torque_percent))?;
@@ -463,7 +462,7 @@ where
         device
             .overload_torque()
             .write(|w| w.set_torque(overload_torque_percent))?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -479,13 +478,13 @@ where
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.led_alarm_condition().write(|w| {
             w.set_voltage(voltage);
             w.set_temperature(temperature);
             w.set_overload(overload);
         })?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -501,13 +500,13 @@ where
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.blocking_lock_eeprom()?;
         device.unloading_conditions().write(|w| {
             w.set_voltage(voltage);
             w.set_temperature(temperature);
             w.set_overload(overload);
         })?;
-        device.lock_flag().write(|w| w.set_locked(true))?;
+        device.blocking_unlock_eeprom()?;
         Ok(())
     }
 
@@ -834,12 +833,9 @@ where
         new_id: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, current_id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device.id().write_async(|w| w.set_id(new_id)).await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -853,15 +849,12 @@ where
         baudrate: BaudRate,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .baudrate()
             .write_async(|w| w.set_baudrate(baudrate))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -921,10 +914,7 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .minimum_angle()
             .write_async(|w| w.set_angle(min_angle_steps))
@@ -933,7 +923,7 @@ where
             .maximum_angle()
             .write_async(|w| w.set_angle(max_angle_steps))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -953,10 +943,7 @@ where
         let max_val = (max_volts / VOLTAGE_UNIT) as u8;
 
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .minimum_input_voltage()
             .write_async(|w| w.set_voltage(min_val))
@@ -965,7 +952,7 @@ where
             .maximum_input_voltage()
             .write_async(|w| w.set_voltage(max_val))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -981,15 +968,12 @@ where
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let val = max_temp_celsius as u8;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .maximum_temperature()
             .write_async(|w| w.set_temperature(val))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -1008,15 +992,12 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .maximum_torque()
             .write_async(|w| w.set_torque(val))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -1032,10 +1013,7 @@ where
         ki: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .p_coefficient()
             .write_async(|w| w.set_coefficient(kp))
@@ -1048,7 +1026,7 @@ where
             .i_coefficient()
             .write_async(|w| w.set_coefficient(ki))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -1065,10 +1043,7 @@ where
     ) -> Result<(), ProtocolError<I::Error>> {
         let time_val = (protection_time_ms / PROTECTION_TIME_UNIT_MS).min(254) as u8;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .protection_torque()
             .write_async(|w| w.set_torque(protection_torque_percent))
@@ -1081,7 +1056,7 @@ where
             .overload_torque()
             .write_async(|w| w.set_torque(overload_torque_percent))
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -1097,10 +1072,7 @@ where
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .led_alarm_condition()
             .write_async(|w| {
@@ -1109,7 +1081,7 @@ where
                 w.set_overload(overload);
             })
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
@@ -1125,10 +1097,7 @@ where
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device
-            .lock_flag()
-            .write_async(|w| w.set_locked(false))
-            .await?;
+        device.lock_eeprom().await?;
         device
             .unloading_conditions()
             .write_async(|w| {
@@ -1137,7 +1106,7 @@ where
                 w.set_overload(overload);
             })
             .await?;
-        device.lock_flag().write_async(|w| w.set_locked(true)).await?;
+        device.unlock_eeprom().await?;
         Ok(())
     }
 
