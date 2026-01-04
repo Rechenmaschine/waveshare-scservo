@@ -58,17 +58,10 @@ pub const fn steps_to_degrees(steps: u16) -> f32 {
 }
 
 fn encode_position_payload(position: u16, time: u16, speed: u16) -> [u8; 6] {
-    let mut data = [0u8; 6];
     let p = position.to_be_bytes();
     let t = time.to_be_bytes();
     let s = speed.to_be_bytes();
-    data[0] = p[0];
-    data[1] = p[1];
-    data[2] = t[0];
-    data[3] = t[1];
-    data[4] = s[0];
-    data[5] = s[1];
-    data
+    [p[0], p[1], t[0], t[1], s[0], s[1]]
 }
 
 fn decode_speed(speed_raw: u16) -> f32 {
@@ -243,7 +236,10 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub fn blocking_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    pub fn blocking_version(
+        &mut self,
+        id: u8,
+    ) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let servo_major = device.servo_major_version().read()?.version_number();
         let servo_minor = device.servo_minor_version().read()?.version_number();
@@ -601,10 +597,7 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub fn blocking_current_temperature(
-        &mut self,
-        id: u8,
-    ) -> Result<f32, ProtocolError<I::Error>> {
+    pub fn blocking_current_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let temp = device.current_temperature().read()?.temperature();
         Ok(f32::from(temp))
@@ -645,9 +638,7 @@ where
         address: u8,
         data: &[u8; SIZE],
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.device
-            .interface
-            .blocking_reg_write(id, address, data)
+        self.device.interface.blocking_reg_write(id, address, data)
     }
 
     /// Blocking set the target position, time, and speed asynchronously (servo register action).
@@ -768,9 +759,12 @@ where
 
         let mut states = [ScsServoState::default(); SIZE];
 
-        self.device
-            .interface
-            .blocking_sync_read(address, data_len, ids, &mut output[..total_len])?;
+        self.device.interface.blocking_sync_read(
+            address,
+            data_len,
+            ids,
+            &mut output[..total_len],
+        )?;
 
         for (i, &id) in ids.iter().enumerate() {
             let start = i * data_len as usize;
@@ -789,10 +783,7 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub async fn version(
-        &mut self,
-        id: u8,
-    ) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    pub async fn version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let servo_major = device
             .servo_major_version()
@@ -1164,10 +1155,7 @@ where
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
-    pub async fn current_position_steps(
-        &mut self,
-        id: u8,
-    ) -> Result<u16, ProtocolError<I::Error>> {
+    pub async fn current_position_steps(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let pos = device.current_position().read_async().await?.position();
         Ok(pos)
@@ -1316,7 +1304,11 @@ where
 
         self.device
             .interface
-            .sync_write(registers::TARGET_POSITION_ADDR, data_len, &payload[..offset])
+            .sync_write(
+                registers::TARGET_POSITION_ADDR,
+                data_len,
+                &payload[..offset],
+            )
             .await
     }
 

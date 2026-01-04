@@ -813,9 +813,9 @@ device_driver::create_device!(
     }
 );
 
-impl <I> SclInternal<I>
+impl<I> SclInternal<I>
 where
-    I: device_driver::RegisterInterface<AddressType=u8>,
+    I: device_driver::RegisterInterface<AddressType = u8>,
 {
     pub fn blocking_lock_eeprom(&mut self) -> Result<(), I::Error> {
         self.lock_flag().write(|w| w.set_locked(false))
@@ -826,9 +826,9 @@ where
     }
 }
 
-impl <I> SclInternal<I>
+impl<I> SclInternal<I>
 where
-    I: device_driver::AsyncRegisterInterface<AddressType=u8>,
+    I: device_driver::AsyncRegisterInterface<AddressType = u8>,
 {
     pub async fn lock_eeprom(&mut self) -> Result<(), I::Error> {
         self.lock_flag().write_async(|w| w.set_locked(false)).await

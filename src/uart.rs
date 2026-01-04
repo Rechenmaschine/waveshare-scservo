@@ -24,7 +24,10 @@ pub struct VersionInformation {
 
 impl<I> UartBusInterface<I> {
     pub fn new(interface: I) -> Self {
-        UartBusInterface { interface, id: None }
+        UartBusInterface {
+            interface,
+            id: None,
+        }
     }
 
     pub fn set_busid(&mut self, new_id: u8) {
@@ -137,7 +140,8 @@ where
         params[2..2 + ids.len()].copy_from_slice(ids);
 
         let param_slice = &params[..2 + ids.len()];
-        let length = u8::try_from(param_slice.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
+        let length =
+            u8::try_from(param_slice.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
         let id = crate::BROADCAST_ID;
         let instruction = Instruction::SyncRead;
 
@@ -301,7 +305,12 @@ where
         let len = Self::copy_reg_write_params(&mut params, address, data)?;
 
         let mut response = [];
-        self.blocking_transfer(self.id.unwrap(), Instruction::Write, &params[..len], &mut response)?;
+        self.blocking_transfer(
+            self.id.unwrap(),
+            Instruction::Write,
+            &params[..len],
+            &mut response,
+        )?;
         Ok(())
     }
 
@@ -415,7 +424,8 @@ where
         params[2..2 + ids.len()].copy_from_slice(ids);
 
         let param_slice = &params[..2 + ids.len()];
-        let length = u8::try_from(param_slice.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
+        let length =
+            u8::try_from(param_slice.len() + 2).map_err(|_| ProtocolError::InvalidLength)?;
         let id = crate::BROADCAST_ID;
         let instruction = Instruction::SyncRead;
 
@@ -573,8 +583,13 @@ where
         let len = Self::copy_reg_write_params(&mut params, address, data)?;
 
         let mut response = [];
-        self.transfer_async(self.id.unwrap(), Instruction::Write, &params[..len], &mut response)
-            .await?;
+        self.transfer_async(
+            self.id.unwrap(),
+            Instruction::Write,
+            &params[..len],
+            &mut response,
+        )
+        .await?;
         Ok(())
     }
 
