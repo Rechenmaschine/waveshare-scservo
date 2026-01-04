@@ -223,20 +223,7 @@ impl<I> core::ops::DerefMut for BusIdGuard<'_, I> {
 
 impl<I> SCLBus<I> {
     /// Create a new async-capable bus.
-    pub fn new(interface: I) -> Self
-    where
-        I: AsyncRead + AsyncWrite,
-    {
-        let uart_interface = UartBusInterface::new(interface);
-        let device = SclInternal::new(uart_interface);
-        SCLBus { device }
-    }
-
-    /// Create a new blocking bus.
-    pub fn blocking_new(interface: I) -> Self
-    where
-        I: BlockingRead + BlockingWrite,
-    {
+    pub fn new(interface: I) -> Self {
         let uart_interface = UartBusInterface::new(interface);
         let device = SclInternal::new(uart_interface);
         SCLBus { device }
@@ -252,37 +239,22 @@ impl<I> SCLBus<I>
 where
     I: BlockingRead + BlockingWrite,
 {
-    fn transaction_blocking<F, R>(
-        &mut self,
-        id: u8,
-        f: F,
-    ) -> Result<R, ProtocolError<I::Error>>
-    where
-        F: FnOnce(&mut SclInternal<UartBusInterface<I>>) -> Result<R, ProtocolError<I::Error>>,
-    {
-        self.device.interface.set_busid(id);
-        let r = f(&mut self.device)?;
-        self.device.interface.clear_busid();
-        Ok(r)
-    }
-
     /// Blocking read of version information from the servo.
     ///
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let servo_major = device.servo_major_version().read()?.version_number();
-            let servo_minor = device.servo_minor_version().read()?.version_number();
-            let firmware_major = device.fw_major_version().read()?.version_number();
-            let firmware_minor = device.fw_minor_version().read()?.version_number();
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let servo_major = device.servo_major_version().read()?.version_number();
+        let servo_minor = device.servo_minor_version().read()?.version_number();
+        let firmware_major = device.fw_major_version().read()?.version_number();
+        let firmware_minor = device.fw_minor_version().read()?.version_number();
 
-            Ok(VersionInformation {
-                firmware_major,
-                firmware_minor,
-                servo_major,
-                servo_minor,
-            })
+        Ok(VersionInformation {
+            firmware_major,
+            firmware_minor,
+            servo_major,
+            servo_minor,
         })
     }
 
@@ -295,12 +267,11 @@ where
         current_id: u8,
         new_id: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.transaction_blocking(current_id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.id().write(|w| w.set_id(new_id))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, current_id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.id().write(|w| w.set_id(new_id))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set of the baudrate of the servo.
@@ -312,12 +283,11 @@ where
         id: u8,
         baudrate: BaudRate,
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.baudrate().write(|w| w.set_baudrate(baudrate))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.baudrate().write(|w| w.set_baudrate(baudrate))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking reset the servo to factory defaults.
@@ -351,10 +321,9 @@ where
         if matches!(mode, TorqueMode::Unknown(_)) {
             return Err(ProtocolError::InvalidSetting);
         }
-        self.transaction_blocking(id, |device| {
-            device.torque_switch().write(|w| w.set_mode(mode))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.torque_switch().write(|w| w.set_mode(mode))?;
+        Ok(())
     }
 
     /// Blocking set the angle limits of the servo.
@@ -373,17 +342,16 @@ where
         {
             return Err(ProtocolError::InvalidSetting);
         }
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device
-                .minimum_angle()
-                .write(|w| w.set_angle(min_angle_steps))?;
-            device
-                .maximum_angle()
-                .write(|w| w.set_angle(max_angle_steps))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device
+            .minimum_angle()
+            .write(|w| w.set_angle(min_angle_steps))?;
+        device
+            .maximum_angle()
+            .write(|w| w.set_angle(max_angle_steps))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the voltage limits of the servo.
@@ -401,17 +369,16 @@ where
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let max_val = (max_volts / VOLTAGE_UNIT) as u8;
 
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device
-                .minimum_input_voltage()
-                .write(|w| w.set_voltage(min_val))?;
-            device
-                .maximum_input_voltage()
-                .write(|w| w.set_voltage(max_val))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device
+            .minimum_input_voltage()
+            .write(|w| w.set_voltage(min_val))?;
+        device
+            .maximum_input_voltage()
+            .write(|w| w.set_voltage(max_val))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the maximum temperature limit of the servo.
@@ -425,14 +392,13 @@ where
     ) -> Result<(), ProtocolError<I::Error>> {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let val = max_temp_celsius as u8;
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device
-                .maximum_temperature()
-                .write(|w| w.set_temperature(val))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device
+            .maximum_temperature()
+            .write(|w| w.set_temperature(val))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the maximum torque of the servo.
@@ -449,12 +415,11 @@ where
         if val > MAX_TORQUE_VALUE {
             return Err(ProtocolError::InvalidSetting);
         }
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.maximum_torque().write(|w| w.set_torque(val))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.maximum_torque().write(|w| w.set_torque(val))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the PID coefficients of the servo.
@@ -468,14 +433,13 @@ where
         kd: u8,
         ki: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.p_coefficient().write(|w| w.set_coefficient(kp))?;
-            device.d_coefficient().write(|w| w.set_coefficient(kd))?;
-            device.i_coefficient().write(|w| w.set_coefficient(ki))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.p_coefficient().write(|w| w.set_coefficient(kp))?;
+        device.d_coefficient().write(|w| w.set_coefficient(kd))?;
+        device.i_coefficient().write(|w| w.set_coefficient(ki))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the protection configuration of the servo.
@@ -490,18 +454,17 @@ where
         overload_torque_percent: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
         let time_val = (protection_time_ms / PROTECTION_TIME_UNIT_MS).min(254) as u8;
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device
-                .protection_torque()
-                .write(|w| w.set_torque(protection_torque_percent))?;
-            device.protection_time().write(|w| w.set_time(time_val))?;
-            device
-                .overload_torque()
-                .write(|w| w.set_torque(overload_torque_percent))?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device
+            .protection_torque()
+            .write(|w| w.set_torque(protection_torque_percent))?;
+        device.protection_time().write(|w| w.set_time(time_val))?;
+        device
+            .overload_torque()
+            .write(|w| w.set_torque(overload_torque_percent))?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the alarm LED configuration of the servo.
@@ -515,16 +478,15 @@ where
         temperature: bool,
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.led_alarm_condition().write(|w| {
-                w.set_voltage(voltage);
-                w.set_temperature(temperature);
-                w.set_overload(overload);
-            })?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.led_alarm_condition().write(|w| {
+            w.set_voltage(voltage);
+            w.set_temperature(temperature);
+            w.set_overload(overload);
+        })?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking set the alarm shutdown configuration of the servo.
@@ -538,16 +500,15 @@ where
         temperature: bool,
         overload: bool,
     ) -> Result<(), ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            device.lock_flag().write(|w| w.set_locked(false))?;
-            device.unloading_conditions().write(|w| {
-                w.set_voltage(voltage);
-                w.set_temperature(temperature);
-                w.set_overload(overload);
-            })?;
-            device.lock_flag().write(|w| w.set_locked(true))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.lock_flag().write(|w| w.set_locked(false))?;
+        device.unloading_conditions().write(|w| {
+            w.set_voltage(voltage);
+            w.set_temperature(temperature);
+            w.set_overload(overload);
+        })?;
+        device.lock_flag().write(|w| w.set_locked(true))?;
+        Ok(())
     }
 
     /// Blocking read the status of the servo.
@@ -555,13 +516,12 @@ where
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_read_status(&mut self, id: u8) -> Result<ScsStatus, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let status = device.servo_status().read()?;
-            Ok(ScsStatus {
-                voltage_error: status.voltage(),
-                temperature_error: status.temperature(),
-                overload_error: status.overload(),
-            })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let status = device.servo_status().read()?;
+        Ok(ScsStatus {
+            voltage_error: status.voltage(),
+            temperature_error: status.temperature(),
+            overload_error: status.overload(),
         })
     }
 
@@ -570,10 +530,9 @@ where
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_is_moving(&mut self, id: u8) -> Result<bool, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let moving = device.move_flag().read()?.flag();
-            Ok(moving)
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let moving = device.move_flag().read()?.flag();
+        Ok(moving)
     }
 
     /// Blocking set the target position of the servo.
@@ -592,10 +551,9 @@ where
         if steps > MAX_POSITION_STEPS {
             return Err(ProtocolError::InvalidSetting);
         }
-        self.transaction_blocking(id, |device| {
-            device.target_position().write(|w| w.set_position(steps))?;
-            Ok(())
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.target_position().write(|w| w.set_position(steps))?;
+        Ok(())
     }
 
     /// Blocking get the current position of the servo.
@@ -608,10 +566,9 @@ where
         &mut self,
         id: u8,
     ) -> Result<u16, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let pos = device.current_position().read()?.position();
-            Ok(pos)
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let pos = device.current_position().read()?.position();
+        Ok(pos)
     }
 
     /// Blocking get the current speed of the servo.
@@ -622,10 +579,9 @@ where
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_current_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let speed_raw = device.current_speed().read()?.speed();
-            Ok(decode_speed(speed_raw))
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let speed_raw = device.current_speed().read()?.speed();
+        Ok(decode_speed(speed_raw))
     }
 
     /// Blocking get the current input voltage of the servo.
@@ -635,10 +591,9 @@ where
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_current_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let voltage = device.current_voltage().read()?.voltage();
-            Ok(f32::from(voltage) * VOLTAGE_UNIT)
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let voltage = device.current_voltage().read()?.voltage();
+        Ok(f32::from(voltage) * VOLTAGE_UNIT)
     }
 
     /// Blocking get the current temperature of the servo.
@@ -651,10 +606,9 @@ where
         &mut self,
         id: u8,
     ) -> Result<f32, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let temp = device.current_temperature().read()?.temperature();
-            Ok(f32::from(temp))
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let temp = device.current_temperature().read()?.temperature();
+        Ok(f32::from(temp))
     }
 
     /// Blocking get the current load of the servo.
@@ -665,10 +619,9 @@ where
     /// # Errors
     /// Returns a `ProtocolError` if the communication fails.
     pub fn blocking_current_load(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
-        self.transaction_blocking(id, |device| {
-            let load_raw = device.current_load().read()?.load();
-            Ok(decode_load(load_raw))
-        })
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let load_raw = device.current_load().read()?.load();
+        Ok(decode_load(load_raw))
     }
 
     /// Blocking trigger the action for registered instructions.
@@ -1472,30 +1425,6 @@ mod tests {
 
     #[test]
     fn test_device_creation() {
-        let mut bus = SCLBus::blocking_new(MockInterface { inner: () });
-        const ID: u8 = 1;
-
-        bus.blocking_set_id(BROADCAST_ID, NEW_ID).unwrap();
-        bus.blocking_set_baudrate(ID, BaudRate::Baud1000000)
-            .unwrap();
-
-        bus.blocking_set_angle_limits(ID, degrees_to_steps(0.0), degrees_to_steps(180.0))
-            .unwrap();
-        bus.blocking_set_target_position(ID, degrees_to_steps(200.0))
-            .unwrap();
-        bus.blocking_set_torque_mode(ID, TorqueMode::Enable).unwrap();
-
-        const NEW_ID: u8 = 2;
-
-        bus.inner_mut()
-            .read_all_registers(|_, _, _| {})
-            .expect("TODO: panic message");
-
-        let ids = [1u8, 2u8, 3u8];
-        let _x = bus.blocking_sync_read_state(&ids).unwrap();
-
-        let _raw_data: [[u8; 8]; 3] =
-            bus.blocking_sync_read_raw(registers::CURRENT_POSITION_ADDR, &ids)
-                .unwrap();
+        let _bus = SCLBus::new(MockInterface { inner: () });
     }
 }
