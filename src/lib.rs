@@ -1351,36 +1351,6 @@ where
             .await
     }
 
-    /// Read from multiple servos simultaneously.
-    ///
-    /// # Arguments
-    /// * `address` - The starting register address.
-    /// * `ids` - The IDs of the servos to read from.
-    ///
-    /// # Errors
-    /// Returns a `ProtocolError` if the communication fails.
-    pub async fn sync_read_raw<const NUM_SERVOS: usize, const DATA_LEN: usize>(
-        &mut self,
-        address: u8,
-        ids: &[u8; NUM_SERVOS],
-    ) -> Result<[[u8; DATA_LEN]; NUM_SERVOS], ProtocolError<I::Error>> {
-        let data_len =
-            u8::try_from(DATA_LEN).map_err(|_| ProtocolError::<I::Error>::InvalidLength)?;
-        self.device
-            .interface
-            .send_sync_read_request(address, data_len, ids)
-            .await?;
-
-        let mut result = [[0u8; DATA_LEN]; NUM_SERVOS];
-        for (i, id) in ids.iter().enumerate() {
-            self.device
-                .interface
-                .read_response_async(*id, &mut result[i])
-                .await?;
-        }
-        Ok(result)
-    }
-
     /// Read the state of multiple servos simultaneously.
     ///
     /// Reads position, speed, load, voltage, and temperature.
@@ -1415,6 +1385,36 @@ where
             states[i] = parse_state_chunk(id, chunk);
         }
         Ok(states)
+    }
+
+    /// Read from multiple servos simultaneously.
+    ///
+    /// # Arguments
+    /// * `address` - The starting register address.
+    /// * `ids` - The IDs of the servos to read from.
+    ///
+    /// # Errors
+    /// Returns a `ProtocolError` if the communication fails.
+    pub async fn sync_read_raw<const NUM_SERVOS: usize, const DATA_LEN: usize>(
+        &mut self,
+        address: u8,
+        ids: &[u8; NUM_SERVOS],
+    ) -> Result<[[u8; DATA_LEN]; NUM_SERVOS], ProtocolError<I::Error>> {
+        let data_len =
+            u8::try_from(DATA_LEN).map_err(|_| ProtocolError::<I::Error>::InvalidLength)?;
+        self.device
+            .interface
+            .send_sync_read_request(address, data_len, ids)
+            .await?;
+
+        let mut result = [[0u8; DATA_LEN]; NUM_SERVOS];
+        for (i, id) in ids.iter().enumerate() {
+            self.device
+                .interface
+                .read_response_async(*id, &mut result[i])
+                .await?;
+        }
+        Ok(result)
     }
 }
 
