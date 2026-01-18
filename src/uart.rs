@@ -1,4 +1,5 @@
-use crate::{Instruction, ProtocolError};
+use crate::error::ProtocolError;
+use crate::Instruction;
 use device_driver::{AsyncRegisterInterface, RegisterInterface};
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};

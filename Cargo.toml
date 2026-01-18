@@ -16,5 +16,9 @@ device-driver = {version = "1.0.7", default-features = false, features = ["dsl"]
 embedded-hal-async = "1.0.0"
 
 [features]
+default = ["scscl", "sms_sts"]
 std = []
 defmt = ["dep:defmt"]
+# Servo series selection - choose one:
+scscl = []      # SCSCL/SC series (potentiometer, big-endian)
+sms_sts = []    # SMS/STS series (magnetic encoder, little-endian)
