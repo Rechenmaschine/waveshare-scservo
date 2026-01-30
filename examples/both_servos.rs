@@ -22,7 +22,7 @@
 #![allow(clippy::doc_markdown)]
 
 use waveshare_scservo::{
-    BROADCAST_ID, ScsPositionMove, ScsclBus, ServoMode, SmsStsBus, TorqueMode,
+    ScsclBus, ScsclPositionMove, ServoMode, SmsPositionMove, SmsStsBus, TorqueMode, BROADCAST_ID,
 };
 
 /// Mock serial interface for demonstration.
@@ -90,10 +90,14 @@ fn demo_sms_sts() {
     // SMS_STS has native mode register
     let _ = bus.blocking_set_operating_mode(1, ServoMode::Wheel);
     let _ = bus.blocking_set_operating_mode(1, ServoMode::Position);
-    let _ = bus.blocking_calibrate(1);
+
+    // Home position calibration
+    let _ = bus.blocking_calibrate(1); // Set current position as home
+    let _ = bus.blocking_read_offset(1); // Read calculated offset
+    let _ = bus.blocking_set_offset(1, 0); // Or manually set offset
 
     // Sync operations
-    let _ = bus.blocking_sync_write_position(&[ScsPositionMove {
+    let _ = bus.blocking_sync_write_position(&[SmsPositionMove {
         id: 1,
         position: 100,
         time: 500,
@@ -119,19 +123,19 @@ where
     I: embedded_io::Read + embedded_io::Write,
 {
     let moves = [
-        ScsPositionMove {
+        ScsclPositionMove {
             id: 1,
             position: 100,
             time: 500,
             speed: 0,
         },
-        ScsPositionMove {
+        ScsclPositionMove {
             id: 2,
             position: 200,
             time: 500,
             speed: 0,
         },
-        ScsPositionMove {
+        ScsclPositionMove {
             id: 3,
             position: 300,
             time: 500,
@@ -174,14 +178,140 @@ where
     I: embedded_io::Read + embedded_io::Write,
 {
     if let Ok(telemetry) = bus.blocking_read_state(1) {
-        println!("Position: {} steps", telemetry.position);
-        println!("Speed: {} steps/s", telemetry.speed);
-        println!("Load: {}%", telemetry.load);
-        println!("Voltage: {} V", telemetry.voltage);
-        println!("Temperature: {} °C", telemetry.temperature);
+        println!("Position: {} steps", telemetry.position());
+        println!("Speed: {} steps/s", telemetry.speed());
+        println!("Load: {:.1}%", telemetry.load());
+        println!("Voltage: {:.1} V", telemetry.voltage());
+        println!("Temperature: {} °C", telemetry.temperature());
         println!("Moving: {}", telemetry.moving);
-        if let Some(current) = telemetry.current {
-            println!("Current: {current} mA");
+        if let Some(current) = telemetry.current() {
+            println!("Current: {:.3} A", current);
+        }
+    }
+}
+
+/// Example: Home position calibration (SMS_STS only).
+///
+/// **Important: 12-bit encoder = 4096 positions (0-4095)**
+///
+/// The offset shifts the coordinate system but doesn't change the total number of positions.
+/// Think of it as sliding a 4096-position window along a number line.
+///
+/// **How it works:**
+/// - Move the servo to your desired "home" position
+/// - Call `blocking_calibrate()` to set that position as the new zero point
+/// - The servo calculates and stores an offset value in EEPROM
+/// - All future position commands are relative to this new coordinate system
+///
+/// **Position Range Examples:**
+/// - offset=0: positions 0 to 4095 (default)
+/// - offset=2048: positions -2048 to +2047 (centered, symmetric)
+/// - offset=4095: positions -4095 to 0 (inverted)
+#[allow(dead_code)]
+fn calibration_example<I>(bus: &mut SmsStsBus<I>)
+where
+    I: embedded_io::Read + embedded_io::Write,
+{
+    // Method 1: Automatic calibration
+    // Move servo to desired home position (e.g., physical center at 2048)
+    let _ = bus.blocking_write_position(1, 2048);
+    // Wait for movement to complete...
+
+    // Set current position as home (zero point)
+    // This calculates offset = current_physical_position - 0 = 2048
+    let _ = bus.blocking_calibrate(1);
+
+    // Read the calculated offset
+    if let Ok(offset) = bus.blocking_read_offset(1) {
+        println!("Calibrated offset: {offset} steps");
+        // After offset=2048, valid range is now -2048 to +2047
+    }
+
+    // Now you can use symmetric signed coordinates:
+    let _ = bus.blocking_write_position(1, 0); // Go to calibrated home
+    let _ = bus.blocking_write_position(1, 1000); // 1000 steps CW from home
+    let _ = bus.blocking_write_position(1, -1000); // 1000 steps CCW from home
+
+    // Method 2: Manual offset setting
+    // Useful if you know the exact offset value you want
+    let _ = bus.blocking_set_offset(1, 2048); // Center the coordinate system
+    // Valid range is now -2048 to +2047 (4096 positions total)
+}
+
+/// Example: Wait for movement to complete.
+///
+/// Three methods to detect when a servo reaches its target position:
+/// 1. Poll `blocking_is_moving()` - simplest for single servo
+/// 2. Check `blocking_read_state().moving` - get full telemetry
+/// 3. Compare position to target - most precise
+#[allow(dead_code)]
+fn wait_for_completion_example<I>(bus: &mut SmsStsBus<I>)
+where
+    I: embedded_io::Read + embedded_io::Write,
+{
+    // Method 1: Simple polling (recommended)
+    let _ = bus.blocking_write_position(1, 2048);
+    loop {
+        match bus.blocking_is_moving(1) {
+            Ok(false) => break, // Movement complete!
+            Ok(true) => {
+                // Still moving, add a small delay here in real code
+            }
+            Err(_) => break, // Handle error
+        }
+    }
+
+    // Method 2: Check via telemetry (get position + moving status at once)
+    let _ = bus.blocking_write_position(1, 1024);
+    loop {
+        if let Ok(telemetry) = bus.blocking_read_state(1) {
+            if !telemetry.moving {
+                println!("Reached position: {}", telemetry.position());
+                break;
+            }
+        }
+    }
+
+    // Method 3: Multiple servos (sync read)
+    let moves = [
+        SmsPositionMove {
+            id: 1,
+            position: 100,
+            time: 500,
+            speed: 0,
+        },
+        SmsPositionMove {
+            id: 2,
+            position: 200,
+            time: 500,
+            speed: 0,
+        },
+    ];
+    let _ = bus.blocking_sync_write_position(&moves);
+
+    // Example: Custom sync write using the generic API
+    use waveshare_scservo::SyncWriteData;
+    let custom_writes = [
+        SyncWriteData { id: 1, data: [0x00, 0x08] }, // Write 0x0800 (little-endian)
+        SyncWriteData { id: 2, data: [0x00, 0x04] }, // Write 0x0400 (little-endian)
+    ];
+    let _ = bus.blocking_sync_write_raw(0x2A, &custom_writes); // Write to TARGET_POSITION
+
+    // Wait for all to complete
+    loop {
+        if let Ok(states) = bus.blocking_sync_read_state(&[1, 2]) {
+            if states.iter().all(|s| {
+                // Check if close enough to target (within tolerance)
+                let target = moves
+                    .iter()
+                    .find(|m| m.id == s.id)
+                    .map(|m| m.position)
+                    .unwrap_or(0);
+                s.position.abs_diff(target) < 5 // 5 step tolerance
+            }) {
+                println!("All servos reached their targets!");
+                break;
+            }
         }
     }
 }

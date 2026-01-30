@@ -46,7 +46,16 @@ mod mock;
 pub use error::ProtocolError;
 pub use registers::{BaudRate, TorqueMode};
 pub use series::{ServoMode, ServoTelemetry};
-pub use types::{ScsPositionMove, ScsServoState, ScsStatus};
+pub use types::{
+    ScsStatus, ScsclPositionMove, ScsclServoState, SmsPositionMove, SmsPositionMoveEx,
+    SmsServoState, SmsSpeedCommand, SyncWriteData, TorqueModeCommand,
+};
+
+#[cfg(feature = "scscl")]
+pub use types::ScsclMotorCommand;
+
+#[cfg(feature = "sms_sts")]
+pub use types::SmsTorqueLimitCommand;
 pub use uart::{UartBusInterface, VersionInformation};
 
 #[cfg(feature = "scscl")]
@@ -99,13 +108,18 @@ pub mod scscl_constants {
 /// SMS_STS series-specific constants
 #[cfg(feature = "sms_sts")]
 pub mod sms_sts_constants {
-    /// Resolution of the servo in steps (0-4095)
+    /// Resolution of the servo (12-bit magnetic encoder)
+    ///
+    /// The encoder provides 4096 distinct positions across 360°.
     pub const SMS_STS_RESOLUTION_STEPS: u16 = 4096;
-    /// Maximum effective angle in degrees
+    /// Maximum effective angle in degrees (full rotation)
     pub const SMS_STS_MAX_ANGLE_DEGREES: f32 = 360.0;
-    /// Minimum resolution angle (degrees per step)
+    /// Angular resolution (degrees per step)
     pub const SMS_STS_DEGREES_PER_STEP: f32 = 0.087_890_625;
-    /// Maximum position value (steps)
+    /// Maximum position value (12-bit encoder: 0-4095)
+    ///
+    /// With offset calibration, positions can be represented as signed coordinates,
+    /// but the total span is always 4096 positions.
     pub const SMS_STS_MAX_POSITION_STEPS: u16 = 4095;
 
     /// Convert degrees to steps for SMS_STS series.
@@ -125,8 +139,6 @@ pub mod sms_sts_constants {
 }
 
 // Internal constants (pub(crate) for use by bus modules)
-pub(crate) const VOLTAGE_UNIT: f32 = 0.1;
-pub(crate) const TORQUE_UNIT: f32 = 0.1;
 
 const BIT_15_SIGN: u16 = 0x8000;
 const BIT_15_VALUE: u16 = 0x7FFF;
@@ -134,29 +146,39 @@ const BIT_10_SIGN: u16 = 0x0400;
 const BIT_10_VALUE: u16 = 0x03FF;
 
 /// Decode signed speed (bit 15 = sign).
-pub(crate) fn decode_speed(speed_raw: u16) -> f32 {
+///
+/// Returns: i16 in steps/second (native hardware unit).
+#[allow(clippy::cast_possible_wrap)]
+pub(crate) fn decode_speed(speed_raw: u16) -> i16 {
     if speed_raw & BIT_15_SIGN != 0 {
-        -f32::from(speed_raw & BIT_15_VALUE)
+        -((speed_raw & BIT_15_VALUE) as i16)
     } else {
-        f32::from(speed_raw)
+        speed_raw as i16
     }
 }
 
 /// Decode signed load (bit 10 = sign).
-pub(crate) fn decode_load(load_raw: u16) -> f32 {
+///
+/// Returns: i16 in 0.1% units (0-1000 = 0-100%, native hardware unit).
+/// To convert to percentage: `(load as f32) * 0.1`
+#[allow(clippy::cast_possible_wrap)]
+pub(crate) fn decode_load(load_raw: u16) -> i16 {
     if load_raw & BIT_10_SIGN != 0 {
-        -f32::from(load_raw & BIT_10_VALUE) * TORQUE_UNIT
+        -((load_raw & BIT_10_VALUE) as i16)
     } else {
-        f32::from(load_raw) * TORQUE_UNIT
+        load_raw as i16
     }
 }
 
 /// Decode signed current (bit 15 = sign).
-pub(crate) fn decode_current(current_raw: u16) -> f32 {
+///
+/// Returns: i16 in native hardware units (likely mA).
+#[allow(clippy::cast_possible_wrap)]
+pub(crate) fn decode_current(current_raw: u16) -> i16 {
     if current_raw & BIT_15_SIGN != 0 {
-        -f32::from(current_raw & BIT_15_VALUE)
+        -((current_raw & BIT_15_VALUE) as i16)
     } else {
-        f32::from(current_raw)
+        current_raw as i16
     }
 }
 
@@ -176,19 +198,17 @@ mod tests {
     use super::*;
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_decode_speed() {
-        assert_eq!(decode_speed(100), 100.0);
-        assert_eq!(decode_speed(0x8064), -100.0);
-        assert_eq!(decode_speed(0), 0.0);
+        assert_eq!(decode_speed(100), 100);
+        assert_eq!(decode_speed(0x8064), -100);
+        assert_eq!(decode_speed(0), 0);
     }
 
     #[test]
-    #[allow(clippy::float_cmp)]
     fn test_decode_load() {
-        assert_eq!(decode_load(100), 10.0);
-        assert_eq!(decode_load(0x0464), -10.0);
-        assert_eq!(decode_load(0), 0.0);
+        assert_eq!(decode_load(100), 100);
+        assert_eq!(decode_load(0x0464), -100);
+        assert_eq!(decode_load(0), 0);
     }
 
     #[cfg(feature = "scscl")]

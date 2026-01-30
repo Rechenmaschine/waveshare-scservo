@@ -398,11 +398,20 @@ device_driver::create_device!(
             position: uint = 0..16,
         },
 
-        /// Operation time (ms)
-        /// - Min: 0, Max: 9999
+        /// Goal time (ms) / PWM output
         /// - Storage: SRAM
-        /// Used for PWM output in PWM mode (bit 10 = sign)
-        register OPERATION_TIME {
+        ///
+        /// **Position mode:** Movement duration in milliseconds (0-9999)
+        /// - How long the servo should take to reach the target position
+        ///
+        /// **Wheel/PWM mode:** Signed PWM motor output (bit 10 = sign)
+        /// - Typical range: -1000 to 1000
+        /// - Positive = CW, Negative = CCW
+        /// - Encoding: if negative, set bit 10 and use absolute value
+        ///
+        /// The servo firmware interprets this register based on operating mode.
+        /// Reference: SCSCL.h defines this as SCSCL_GOAL_TIME_L (address 44 = 0x2C)
+        register GOAL_TIME {
             const ADDRESS = 0x2C;
             const SIZE_BITS = 16;
             type Access = RW;
@@ -411,10 +420,16 @@ device_driver::create_device!(
             time: uint = 0..16,
         },
 
-        /// Operation speed (steps/s)
-        /// - Min: 0, Max: 1000
+        /// Goal speed (steps/s)
         /// - Storage: SRAM
-        register OPERATION_SPEED {
+        ///
+        /// **Position mode:** Maximum speed limit for movements (0-1000)
+        ///
+        /// Unlike SMS_STS (which uses this for wheel mode speed control),
+        /// SCSCL uses GOAL_TIME for PWM output in wheel mode.
+        ///
+        /// Reference: SCSCL.h defines this as SCSCL_GOAL_SPEED_L (address 46 = 0x2E)
+        register GOAL_SPEED {
             const ADDRESS = 0x2E;
             const SIZE_BITS = 16;
             type Access = RW;

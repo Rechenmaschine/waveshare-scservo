@@ -445,10 +445,17 @@ device_driver::create_device!(
             position: uint = 0..16,
         },
 
-        /// Operation time (ms)
-        /// - Min: 0, Max: 9999
+        /// Goal time (ms)
         /// - Storage: SRAM
-        register OPERATION_TIME {
+        ///
+        /// **Position mode:** Movement duration in milliseconds (0-9999)
+        /// - How long the servo should take to reach the target position
+        ///
+        /// **Wheel mode:** Not used (unlike SCSCL which repurposes this for PWM output)
+        /// - In wheel mode, use GOAL_SPEED register instead
+        ///
+        /// Reference: SMS_STS.h defines this as SMS_STS_GOAL_TIME_L (address 44 = 0x2C)
+        register GOAL_TIME {
             const ADDRESS = 0x2C;
             const SIZE_BITS = 16;
             type Access = RW;
@@ -457,11 +464,20 @@ device_driver::create_device!(
             time: uint = 0..16,
         },
 
-        /// Operation speed (steps/s)
-        /// - In wheel mode: signed speed with bit 15 = direction
-        /// - Min: 0, Max: 1000 (position mode)
+        /// Goal speed (steps/s)
         /// - Storage: SRAM
-        register OPERATION_SPEED {
+        ///
+        /// **Position mode:** Maximum speed for position moves (0-1000)
+        ///
+        /// **Wheel mode:** Signed rotation speed (bit 15 = direction)
+        /// - Positive = CW, Negative = CCW
+        /// - Encoding: if negative, set bit 15 and use absolute value
+        ///
+        /// Unlike SCSCL (which uses GOAL_TIME for PWM output), SMS_STS has a dedicated
+        /// speed register that serves both modes.
+        ///
+        /// Reference: SMS_STS.h defines this as SMS_STS_GOAL_SPEED_L (address 46 = 0x2E)
+        register GOAL_SPEED {
             const ADDRESS = 0x2E;
             const SIZE_BITS = 16;
             type Access = RW;
