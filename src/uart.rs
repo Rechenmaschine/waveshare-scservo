@@ -1,5 +1,5 @@
 use crate::error::ProtocolError;
-use crate::Instruction;
+use crate::types::Instruction;
 use device_driver::{AsyncRegisterInterface, RegisterInterface};
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
@@ -260,7 +260,7 @@ where
         Ok(response_params.len())
     }
 
-    pub fn blocking_transfer(
+    pub(crate) fn blocking_transfer(
         &mut self,
         id: u8,
         instruction: Instruction,
@@ -535,7 +535,7 @@ where
         Ok(response_params.len())
     }
 
-    pub async fn transfer_async(
+    pub(crate) async fn transfer_async(
         &mut self,
         id: u8,
         instruction: Instruction,

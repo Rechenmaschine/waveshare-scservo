@@ -16,9 +16,15 @@ pub use sc_device::ScsclDevice;
 #[cfg(feature = "sms_sts")]
 pub use sts_device::SmsStsDevice;
 
-/// Register addresses used for raw protocol operations (sync read/write).
+/// Register addresses used for raw protocol operations (sync read/write, reg write).
+///
+/// These addresses are the same across SCSCL and SMS_STS series.
+/// They are defined here for use in protocol-level operations where the
+/// register abstraction cannot be used (SYNC_READ, SYNC_WRITE, REG_WRITE).
 pub mod addr {
+    /// Target position register address (0x2A)
     pub const TARGET_POSITION: u8 = 0x2A;
+    /// Current position register address (0x38)
     pub const CURRENT_POSITION: u8 = 0x38;
 }
 

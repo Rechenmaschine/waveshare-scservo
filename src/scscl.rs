@@ -8,8 +8,8 @@ use crate::series::{ServoMode, ServoTelemetry};
 use crate::types::{ScsPositionMove, ScsServoState, ScsStatus};
 use crate::uart::UartBusInterface;
 use crate::{
-    registers, Instruction, TorqueMode, VersionInformation, BROADCAST_ID, MAX_TORQUE_VALUE,
-    TORQUE_UNIT, VOLTAGE_UNIT,
+    registers, TorqueMode, VersionInformation, BROADCAST_ID, MAX_TORQUE_VALUE, TORQUE_UNIT,
+    VOLTAGE_UNIT,
 };
 use crate::{decode_current, decode_load, decode_speed, encode_signed_pwm};
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
@@ -120,7 +120,7 @@ where
     I: BlockingRead + BlockingWrite,
 {
     /// Read version information.
-    pub fn blocking_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    pub fn blocking_read_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(VersionInformation {
             firmware_major: device.fw_major_version().read()?.version_number(),
@@ -154,11 +154,14 @@ where
 
     /// Set torque mode.
     pub fn blocking_set_torque_mode(&mut self, id: u8, mode: TorqueMode) -> Result<(), ProtocolError<I::Error>> {
-        self.device.interface.blocking_transfer(id, Instruction::Write, &[0x28, mode as u8], &mut [])?;
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.torque_switch().write(|w| w.set_mode(mode))?;
         Ok(())
     }
 
     /// Set angle limits.
+    ///
+    /// **Units:** `min`, `max` = steps (0-1023)
     pub fn blocking_set_angle_limits(&mut self, id: u8, min: u16, max: u16) -> Result<(), ProtocolError<I::Error>> {
         if min > max {
             return Err(ProtocolError::InvalidSetting);
@@ -172,6 +175,8 @@ where
     }
 
     /// Set voltage limits.
+    ///
+    /// **Units:** `min_volts`, `max_volts` = volts
     pub fn blocking_set_voltage_limits(&mut self, id: u8, min_volts: f32, max_volts: f32) -> Result<(), ProtocolError<I::Error>> {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let min_val = (min_volts / VOLTAGE_UNIT) as u8;
@@ -186,6 +191,8 @@ where
     }
 
     /// Set maximum temperature limit.
+    ///
+    /// **Units:** `max_temp` = degrees Celsius (°C)
     pub fn blocking_set_max_temperature_limit(&mut self, id: u8, max_temp: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.blocking_unlock_eeprom()?;
@@ -195,6 +202,8 @@ where
     }
 
     /// Set maximum torque.
+    ///
+    /// **Units:** `max_torque_percent` = percentage (0.0-100.0%)
     pub fn blocking_set_max_torque(&mut self, id: u8, max_torque_percent: f32) -> Result<(), ProtocolError<I::Error>> {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let val = (max_torque_percent / TORQUE_UNIT) as u16;
@@ -209,6 +218,8 @@ where
     }
 
     /// Set PID coefficients.
+    ///
+    /// **Units:** `kp`, `kd`, `ki` = unitless (0-254)
     pub fn blocking_set_pid_coefficients(&mut self, id: u8, kp: u8, kd: u8, ki: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.blocking_unlock_eeprom()?;
@@ -219,39 +230,46 @@ where
         Ok(())
     }
 
-    /// Set target position.
-    pub fn blocking_set_target_position(&mut self, id: u8, steps: u16) -> Result<(), ProtocolError<I::Error>> {
+    /// Write target position (immediate motion command).
+    ///
+    /// Requires torque enabled first ([`blocking_set_torque_mode`](Self::blocking_set_torque_mode)).
+    ///
+    /// **Units:** `steps` = steps (0-1023 for SCSCL)
+    ///
+    /// **See also:** [`blocking_sync_write_position`](Self::blocking_sync_write_position) (multiple servos),
+    /// [`blocking_reg_write_position`](Self::blocking_reg_write_position) + [`blocking_action`](Self::blocking_action) (coordinated start).
+    pub fn blocking_write_position(&mut self, id: u8, steps: u16) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.target_position().write(|w| w.set_position(steps))?;
         Ok(())
     }
 
-    /// Get current position.
-    pub fn blocking_current_position_steps(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
+    /// Read current position in steps.
+    pub fn blocking_read_position(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_position().read()?.position())
     }
 
-    /// Get current speed.
-    pub fn blocking_current_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
+    /// Read current speed in steps/s.
+    pub fn blocking_read_speed(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_speed(device.current_speed().read()?.speed()))
     }
 
-    /// Get current voltage.
-    pub fn blocking_current_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
+    /// Read current voltage in volts.
+    pub fn blocking_read_voltage(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(f32::from(device.current_voltage().read()?.voltage()) * VOLTAGE_UNIT)
     }
 
-    /// Get current temperature.
-    pub fn blocking_current_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
+    /// Read current temperature in Celsius.
+    pub fn blocking_read_temperature(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(f32::from(device.current_temperature().read()?.temperature()))
     }
 
-    /// Get current load.
-    pub fn blocking_current_load(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
+    /// Read current load as percentage.
+    pub fn blocking_read_load(&mut self, id: u8) -> Result<f32, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_load(device.current_load().read()?.load()))
     }
@@ -267,6 +285,7 @@ where
         let mut device = BusIdGuard::new(&mut self.device, id);
         let status = device.servo_status().read()?;
         Ok(ScsStatus {
+            id,
             voltage_error: status.voltage(),
             temperature_error: status.temperature(),
             overload_error: status.overload(),
@@ -279,9 +298,9 @@ where
         Ok(device.move_flag().read()?.flag())
     }
 
-    /// Read servo mode (position or wheel/PWM).
+    /// Read servo mode (position or wheel/motor).
     ///
-    /// SCSCL uses angle limits = 0 to indicate wheel/PWM mode.
+    /// SCSCL uses angle limits = 0 to indicate wheel/motor mode.
     pub fn blocking_read_mode(&mut self, id: u8) -> Result<ServoMode, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let min = device.minimum_angle().read()?.angle();
@@ -293,33 +312,66 @@ where
         }
     }
 
-    /// Enable PWM mode (sets angle limits to 0).
-    pub fn blocking_pwm_mode(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
-        self.blocking_set_angle_limits(id, 0, 0)
+    /// Set servo operating mode.
+    ///
+    /// SCSCL emulates mode switching via angle limits:
+    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
+    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
+    ///
+    /// **Note:** If you need custom angle limits in position mode, call
+    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
+    pub fn blocking_set_operating_mode(&mut self, id: u8, mode: ServoMode) -> Result<(), ProtocolError<I::Error>> {
+        match mode {
+            ServoMode::Wheel => self.blocking_set_angle_limits(id, 0, 0),
+            ServoMode::Position => {
+                use crate::scscl_constants::SCSCL_MAX_POSITION_STEPS;
+                self.blocking_set_angle_limits(id, 0, SCSCL_MAX_POSITION_STEPS)
+            }
+        }
     }
 
-    /// Write PWM value (SCSCL-specific).
+    /// Write motor output in wheel/motor mode.
     ///
-    /// Positive = CW, negative = CCW.
-    pub fn blocking_write_pwm(&mut self, id: u8, pwm: i16) -> Result<(), ProtocolError<I::Error>> {
-        let encoded = encode_signed_pwm(pwm);
+    /// This is the SCSCL equivalent of "wheel mode speed" on SMS/STS.
+    ///
+    /// **Units:** `output` = signed PWM value (range depends on servo model, typical -1000 to 1000)
+    /// - Positive = CW
+    /// - Negative = CCW
+    ///
+    /// Note: on SCSCL this command is encoded with bit 10 as the sign/direction and is written to
+    /// the "operation time" register, which is repurposed for motor output in wheel/motor mode.
+    pub fn blocking_write_motor(&mut self, id: u8, output: i16) -> Result<(), ProtocolError<I::Error>> {
+        let encoded = encode_signed_pwm(output);
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.operation_time().write(|w| w.set_time(encoded))?;
         Ok(())
     }
 
     /// Trigger registered actions.
+    /// Trigger execution of queued REG_WRITE commands.
+    ///
+    /// Use [`BROADCAST_ID`](crate::BROADCAST_ID) to trigger all servos simultaneously.
+    /// Must call [`blocking_reg_write_position`](Self::blocking_reg_write_position) first to queue commands.
     pub fn blocking_action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_action(id)
     }
 
     /// Set target position with time/speed (deferred execution).
+    /// Queue position command (deferred execution).
+    ///
+    /// Queues a position command that executes when [`blocking_action`](Self::blocking_action) is called.
+    /// Use this to synchronize multiple servos to start moving at the same time.
+    ///
+    /// **Units:**
+    /// - `position` = steps (0-1023 for SCSCL)
+    /// - `time` = milliseconds (movement time, use 0 for max speed control via `speed` parameter)
+    /// - `speed` = steps/second
     pub fn blocking_reg_write_position(&mut self, id: u8, position: u16, time: u16, speed: u16) -> Result<(), ProtocolError<I::Error>> {
         let data = encode_position_payload(position, time, speed);
         self.device.interface.blocking_reg_write(id, registers::addr::TARGET_POSITION, &data)
     }
 
-    /// Move multiple servos simultaneously.
+    /// Move multiple servos simultaneously (more synchronized than individual writes).
     pub fn blocking_sync_write_position<const SIZE: usize>(&mut self, moves: &[ScsPositionMove; SIZE]) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_position_payload(moves, &mut payload)?;
@@ -343,9 +395,11 @@ where
         Ok(states)
     }
 
-    /// Read full telemetry.
+    /// Read all telemetry (position, speed, load, voltage, temperature, etc.) in one transaction.
+    ///
+    /// More efficient than calling individual `blocking_read_*` functions.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    pub fn blocking_feedback(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
+    pub fn blocking_read_state(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read()?.position();
         let speed_raw = device.current_speed().read()?.speed();
@@ -372,7 +426,7 @@ where
     I: AsyncRead + AsyncWrite,
 {
     /// Read version information.
-    pub async fn version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    pub async fn read_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(VersionInformation {
             firmware_major: device.fw_major_version().read_async().await?.version_number(),
@@ -396,31 +450,53 @@ where
     }
 
     /// Set target position.
-    pub async fn set_target_position(&mut self, id: u8, steps: u16) -> Result<(), ProtocolError<I::Error>> {
+    pub async fn write_position(&mut self, id: u8, steps: u16) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.target_position().write_async(|w| w.set_position(steps)).await?;
         Ok(())
     }
 
     /// Get current position.
-    pub async fn current_position_steps(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
+    pub async fn read_position(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_position().read_async().await?.position())
     }
 
-    /// Enable PWM mode.
-    pub async fn pwm_mode(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
-        let mut device = BusIdGuard::new(&mut self.device, id);
-        device.unlock_eeprom().await?;
-        device.minimum_angle().write_async(|w| w.set_angle(0)).await?;
-        device.maximum_angle().write_async(|w| w.set_angle(0)).await?;
-        device.lock_eeprom().await?;
-        Ok(())
+    /// Set servo operating mode.
+    ///
+    /// SCSCL emulates mode switching via angle limits:
+    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
+    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
+    ///
+    /// **Note:** If you need custom angle limits in position mode, use
+    /// [`set_angle_limits`](Self::set_angle_limits) after switching modes.
+    pub async fn set_operating_mode(&mut self, id: u8, mode: ServoMode) -> Result<(), ProtocolError<I::Error>> {
+        match mode {
+            ServoMode::Wheel => {
+                let mut device = BusIdGuard::new(&mut self.device, id);
+                device.unlock_eeprom().await?;
+                device.minimum_angle().write_async(|w| w.set_angle(0)).await?;
+                device.maximum_angle().write_async(|w| w.set_angle(0)).await?;
+                device.lock_eeprom().await?;
+                Ok(())
+            }
+            ServoMode::Position => {
+                use crate::scscl_constants::SCSCL_MAX_POSITION_STEPS;
+                let mut device = BusIdGuard::new(&mut self.device, id);
+                device.unlock_eeprom().await?;
+                device.minimum_angle().write_async(|w| w.set_angle(0)).await?;
+                device.maximum_angle().write_async(|w| w.set_angle(SCSCL_MAX_POSITION_STEPS)).await?;
+                device.lock_eeprom().await?;
+                Ok(())
+            }
+        }
     }
 
-    /// Write PWM value.
-    pub async fn write_pwm(&mut self, id: u8, pwm: i16) -> Result<(), ProtocolError<I::Error>> {
-        let encoded = encode_signed_pwm(pwm);
+    /// Write motor output in wheel/motor mode.
+    ///
+    /// Signed: positive = CW, negative = CCW.
+    pub async fn write_motor(&mut self, id: u8, output: i16) -> Result<(), ProtocolError<I::Error>> {
+        let encoded = encode_signed_pwm(output);
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.operation_time().write_async(|w| w.set_time(encoded)).await?;
         Ok(())
@@ -428,7 +504,7 @@ where
 
     /// Read full telemetry.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
-    pub async fn feedback(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
+    pub async fn read_state(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read_async().await?.position();
         let speed_raw = device.current_speed().read_async().await?.speed();

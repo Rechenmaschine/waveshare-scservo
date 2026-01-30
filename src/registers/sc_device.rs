@@ -387,7 +387,7 @@ device_driver::create_device!(
         },
 
         /// Target position (steps)
-        /// - Min: 0, Max: 1023
+        /// - Min: 0, Max: 1023 (for SCSCL servos)
         /// - Storage: SRAM
         register TARGET_POSITION {
             const ADDRESS = 0x2A;
@@ -395,7 +395,7 @@ device_driver::create_device!(
             type Access = RW;
             const RESET_VALUE = 0;
 
-            position: uint = 0..10,
+            position: uint = 0..16,
         },
 
         /// Operation time (ms)

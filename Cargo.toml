@@ -3,7 +3,7 @@ name = "waveshare-scservo"
 version = "0.1.0"
 edition = "2024"
 authors = ["Louis Schell <louis.schell1@gmx.de>"]
-description = "Rust implementation of the Waveshare SCServo protocol using embedded-hal"
+description = "Waveshare SCServo protocol in embedded-hal"
 keywords = ["embedded", "waveshare", "servo", "SC09", "SC15"]
 license = "MIT"
 
@@ -19,6 +19,8 @@ embedded-hal-async = "1.0.0"
 default = ["scscl", "sms_sts"]
 std = []
 defmt = ["dep:defmt"]
-# Servo series selection - choose one:
-scscl = []      # SCSCL/SC series (potentiometer, big-endian)
-sms_sts = []    # SMS/STS series (magnetic encoder, little-endian)
+
+# Support for SCSCL/SC series (potentiometer, big-endian)
+scscl = []
+# Support for SMS/STS series (magnetic encoder, little-endian)
+sms_sts = []

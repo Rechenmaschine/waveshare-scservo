@@ -43,6 +43,3 @@ impl<E: fmt::Debug> fmt::Display for ProtocolError<E> {
         }
     }
 }
-
-#[cfg(feature = "std")]
-impl<E: fmt::Debug> std::error::Error for ProtocolError<E> {}
