@@ -1,317 +1,146 @@
-//! Example showing both SCSCL and SMS_STS servo buses.
-//!
-//! This example demonstrates the API for both servo series.
-//! In practice, you'd use one or the other depending on your hardware.
-//!
-//! # Synchronized Motion: SYNC_WRITE vs REG_WRITE+ACTION
-//!
-//! Both methods achieve synchronized movement, but work differently:
-//!
-//! **SYNC_WRITE (Recommended for position commands):**
-//! - 1 packet total (broadcast to all servos)
-//! - Immediate execution
-//! - Most efficient
-//! - Only works for commands with protocol-level SYNC_WRITE support
-//!
-//! **REG_WRITE + ACTION:**
-//! - N+1 packets (one per servo + one ACTION broadcast)
-//! - Deferred execution (queue then trigger)
-//! - More flexible (works with any command)
-//! - Use when SYNC_WRITE isn't available for your command
+// Two-servo ordered flow on a UART (SCSCL series).
+// For SMS_STS, swap ScsclBus + Scscl* types for SmsStsBus + Sms* types.
 
-#![allow(clippy::doc_markdown)]
+use std::time::Duration;
 
 use waveshare_scservo::{
-    ScsclBus, ScsclPositionMove, ServoMode, SmsPositionMove, SmsStsBus, TorqueMode, BROADCAST_ID,
+    BROADCAST_ID, ScsclBus, ScsclMotorCommand, ScsclPositionMove, ServoMode, TorqueMode,
 };
 
-/// Mock serial interface for demonstration.
-/// Replace with your actual embedded-io serial implementation.
-struct MockSerial;
+struct StdUart(Box<dyn serialport::SerialPort>);
 
-impl embedded_io::ErrorType for MockSerial {
-    type Error = core::convert::Infallible;
+impl embedded_io::ErrorType for StdUart {
+    type Error = embedded_io::ErrorKind;
 }
 
-impl embedded_io::Read for MockSerial {
-    fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
-        Ok(0)
+impl embedded_io::Read for StdUart {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        std::io::Read::read(&mut self.0, buf).map_err(|_| embedded_io::ErrorKind::Other)
     }
 }
 
-impl embedded_io::Write for MockSerial {
+impl embedded_io::Write for StdUart {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        Ok(buf.len())
+        std::io::Write::write(&mut self.0, buf).map_err(|_| embedded_io::ErrorKind::Other)
     }
 
     fn flush(&mut self) -> Result<(), Self::Error> {
-        Ok(())
+        std::io::Write::flush(&mut self.0).map_err(|_| embedded_io::ErrorKind::Other)
     }
+}
+
+fn open_uart(path: &str, baud: u32) -> StdUart {
+    let port = serialport::new(path, baud)
+        .timeout(Duration::from_millis(50))
+        .open()
+        .expect("open uart");
+    StdUart(port)
 }
 
 fn main() {
-    println!("=== SCSCL Series (Potentiometer, Big-Endian) ===\n");
-    demo_scscl();
+    let mut args = std::env::args().skip(1);
+    let port = match args.next() {
+        Some(value) => value,
+        None => print_help(),
+    };
+    let baud = match args.next().and_then(|value| value.parse().ok()) {
+        Some(value) => value,
+        None => print_help(),
+    };
 
-    println!("\n=== SMS_STS Series (Magnetic Encoder, Little-Endian) ===\n");
-    demo_sms_sts();
-}
+    let mut bus = ScsclBus::new(open_uart(&port, baud));
+    let ids = find_two_ids(&mut bus);
 
-fn demo_scscl() {
-    let mut bus = ScsclBus::new(MockSerial);
+    for &id in &ids {
+        bus.blocking_set_torque_mode(id, TorqueMode::Enable)
+            .expect("torque on");
+        bus.blocking_set_operating_mode(id, ServoMode::Position)
+            .expect("position mode");
+    }
 
-    // Basic operations
-    let _ = bus.blocking_ping(1);
-    let _ = bus.blocking_write_position(1, 512);
-    let _ = bus.blocking_read_position(1);
-    let _ = bus.blocking_read_state(1);
+    let tmp = temp_ids(ids);
+    bus.blocking_set_id(ids[0], tmp[0]).expect("set id 1");
+    bus.blocking_set_id(ids[1], tmp[1]).expect("set id 2");
+    bus.blocking_set_id(tmp[0], ids[0]).expect("restore id 1");
+    bus.blocking_set_id(tmp[1], ids[1]).expect("restore id 2");
 
-    // Operating mode (consistent API with SMS_STS, emulated via angle limits on SCSCL)
-    let _ = bus.blocking_set_operating_mode(1, ServoMode::Wheel);
-    let _ = bus.blocking_write_motor(1, 500); // Write motor output
-    let _ = bus.blocking_set_operating_mode(1, ServoMode::Position);
-
-    // Configuration
-    let _ = bus.blocking_set_torque_mode(1, TorqueMode::Enable);
-    let _ = bus.blocking_set_pid_coefficients(1, 15, 0, 0);
-
-    println!("SCSCL demo completed (see code for examples)");
-}
-
-fn demo_sms_sts() {
-    let mut bus = SmsStsBus::new(MockSerial);
-
-    // Basic operations
-    let _ = bus.blocking_ping(1);
-    let _ = bus.blocking_write_position(1, 2048);
-    let _ = bus.blocking_read_position(1);
-    let _ = bus.blocking_read_state(1);
-
-    // SMS_STS has native mode register
-    let _ = bus.blocking_set_operating_mode(1, ServoMode::Wheel);
-    let _ = bus.blocking_set_operating_mode(1, ServoMode::Position);
-
-    // Home position calibration
-    let _ = bus.blocking_calibrate(1); // Set current position as home
-    let _ = bus.blocking_read_offset(1); // Read calculated offset
-    let _ = bus.blocking_set_offset(1, 0); // Or manually set offset
-
-    // Sync operations
-    let _ = bus.blocking_sync_write_position(&[SmsPositionMove {
-        id: 1,
-        position: 100,
-        time: 500,
-        speed: 0,
-    }]);
-    let _ = bus.blocking_sync_read_state(&[1, 2, 3]);
-
-    println!("SMS_STS demo completed (see code for examples)");
-}
-
-/// Example: SYNC_WRITE for simultaneous movement.
-///
-/// **How it works:**
-/// - Sends ONE packet to BROADCAST_ID containing all servo commands
-/// - Packet format: [address, data_len, id1, data1, id2, data2, id3, data3]
-/// - All servos receive and execute immediately
-/// - Most efficient for moving multiple servos
-///
-/// **Limitation:** Only works for commands with SYNC_WRITE support
-#[allow(dead_code)]
-fn sync_write_example<I>(bus: &mut ScsclBus<I>)
-where
-    I: embedded_io::Read + embedded_io::Write,
-{
     let moves = [
         ScsclPositionMove {
-            id: 1,
-            position: 100,
+            id: ids[0],
+            position: 800,
             time: 500,
             speed: 0,
         },
         ScsclPositionMove {
-            id: 2,
-            position: 200,
-            time: 500,
-            speed: 0,
-        },
-        ScsclPositionMove {
-            id: 3,
-            position: 300,
-            time: 500,
-            speed: 0,
-        },
-    ];
-
-    // ONE packet sent, all servos start moving simultaneously
-    let _ = bus.blocking_sync_write_position(&moves);
-}
-
-/// Example: REG_WRITE + ACTION for synchronized movement.
-///
-/// **How it works:**
-/// - REG_WRITE sends individual packets to each servo (id 1, id 2, id 3)
-/// - Commands are queued but NOT executed yet
-/// - ACTION sends ONE broadcast packet that triggers all queued commands
-/// - Total packets: N (for N servos) + 1 (ACTION)
-///
-/// **When to use:** Works with any command, even those without SYNC_WRITE support.
-/// For position commands specifically, prefer SYNC_WRITE (more efficient).
-#[allow(dead_code)]
-fn reg_write_action_example<I>(bus: &mut SmsStsBus<I>)
-where
-    I: embedded_io::Read + embedded_io::Write,
-{
-    // Send 3 individual REG_WRITE packets (one per servo)
-    let _ = bus.blocking_reg_write_position(1, 100, 500, 1000); // Packet 1: queued
-    let _ = bus.blocking_reg_write_position(2, 200, 500, 1000); // Packet 2: queued
-    let _ = bus.blocking_reg_write_position(3, 300, 500, 1000); // Packet 3: queued
-
-    // Send 1 ACTION broadcast packet - triggers all queued commands
-    let _ = bus.blocking_action(BROADCAST_ID); // Packet 4: EXECUTE!
-}
-
-/// Example showing the telemetry structure.
-#[allow(dead_code)]
-fn telemetry_example<I>(bus: &mut SmsStsBus<I>)
-where
-    I: embedded_io::Read + embedded_io::Write,
-{
-    if let Ok(telemetry) = bus.blocking_read_state(1) {
-        println!("Position: {} steps", telemetry.position());
-        println!("Speed: {} steps/s", telemetry.speed());
-        println!("Load: {:.1}%", telemetry.load());
-        println!("Voltage: {:.1} V", telemetry.voltage());
-        println!("Temperature: {} °C", telemetry.temperature());
-        println!("Moving: {}", telemetry.moving);
-        if let Some(current) = telemetry.current() {
-            println!("Current: {:.3} A", current);
-        }
-    }
-}
-
-/// Example: Home position calibration (SMS_STS only).
-///
-/// **Important: 12-bit encoder = 4096 positions (0-4095)**
-///
-/// The offset shifts the coordinate system but doesn't change the total number of positions.
-/// Think of it as sliding a 4096-position window along a number line.
-///
-/// **How it works:**
-/// - Move the servo to your desired "home" position
-/// - Call `blocking_calibrate()` to set that position as the new zero point
-/// - The servo calculates and stores an offset value in EEPROM
-/// - All future position commands are relative to this new coordinate system
-///
-/// **Position Range Examples:**
-/// - offset=0: positions 0 to 4095 (default)
-/// - offset=2048: positions -2048 to +2047 (centered, symmetric)
-/// - offset=4095: positions -4095 to 0 (inverted)
-#[allow(dead_code)]
-fn calibration_example<I>(bus: &mut SmsStsBus<I>)
-where
-    I: embedded_io::Read + embedded_io::Write,
-{
-    // Method 1: Automatic calibration
-    // Move servo to desired home position (e.g., physical center at 2048)
-    let _ = bus.blocking_write_position(1, 2048);
-    // Wait for movement to complete...
-
-    // Set current position as home (zero point)
-    // This calculates offset = current_physical_position - 0 = 2048
-    let _ = bus.blocking_calibrate(1);
-
-    // Read the calculated offset
-    if let Ok(offset) = bus.blocking_read_offset(1) {
-        println!("Calibrated offset: {offset} steps");
-        // After offset=2048, valid range is now -2048 to +2047
-    }
-
-    // Now you can use symmetric signed coordinates:
-    let _ = bus.blocking_write_position(1, 0); // Go to calibrated home
-    let _ = bus.blocking_write_position(1, 1000); // 1000 steps CW from home
-    let _ = bus.blocking_write_position(1, -1000); // 1000 steps CCW from home
-
-    // Method 2: Manual offset setting
-    // Useful if you know the exact offset value you want
-    let _ = bus.blocking_set_offset(1, 2048); // Center the coordinate system
-    // Valid range is now -2048 to +2047 (4096 positions total)
-}
-
-/// Example: Wait for movement to complete.
-///
-/// Three methods to detect when a servo reaches its target position:
-/// 1. Poll `blocking_is_moving()` - simplest for single servo
-/// 2. Check `blocking_read_state().moving` - get full telemetry
-/// 3. Compare position to target - most precise
-#[allow(dead_code)]
-fn wait_for_completion_example<I>(bus: &mut SmsStsBus<I>)
-where
-    I: embedded_io::Read + embedded_io::Write,
-{
-    // Method 1: Simple polling (recommended)
-    let _ = bus.blocking_write_position(1, 2048);
-    loop {
-        match bus.blocking_is_moving(1) {
-            Ok(false) => break, // Movement complete!
-            Ok(true) => {
-                // Still moving, add a small delay here in real code
-            }
-            Err(_) => break, // Handle error
-        }
-    }
-
-    // Method 2: Check via telemetry (get position + moving status at once)
-    let _ = bus.blocking_write_position(1, 1024);
-    loop {
-        if let Ok(telemetry) = bus.blocking_read_state(1) {
-            if !telemetry.moving {
-                println!("Reached position: {}", telemetry.position());
-                break;
-            }
-        }
-    }
-
-    // Method 3: Multiple servos (sync read)
-    let moves = [
-        SmsPositionMove {
-            id: 1,
-            position: 100,
-            time: 500,
-            speed: 0,
-        },
-        SmsPositionMove {
-            id: 2,
+            id: ids[1],
             position: 200,
             time: 500,
             speed: 0,
         },
     ];
-    let _ = bus.blocking_sync_write_position(&moves);
+    bus.blocking_sync_write_position(&moves)
+        .expect("sync move");
 
-    // Example: Custom sync write using the generic API
-    use waveshare_scservo::SyncWriteData;
-    let custom_writes = [
-        SyncWriteData { id: 1, data: [0x00, 0x08] }, // Write 0x0800 (little-endian)
-        SyncWriteData { id: 2, data: [0x00, 0x04] }, // Write 0x0400 (little-endian)
+    let states = bus.blocking_sync_read_state(&ids).expect("sync read");
+    println!("pos: {} {}", states[0].position(), states[1].position());
+
+    bus.blocking_reg_write_position(ids[0], 300, 300, 0)
+        .expect("reg write 1");
+    bus.blocking_reg_write_position(ids[1], 700, 300, 0)
+        .expect("reg write 2");
+    bus.blocking_action(BROADCAST_ID).expect("action");
+
+    for &id in &ids {
+        bus.blocking_set_operating_mode(id, ServoMode::Wheel)
+            .expect("wheel mode");
+    }
+    let motors = [
+        ScsclMotorCommand {
+            id: ids[0],
+            output: 300,
+        },
+        ScsclMotorCommand {
+            id: ids[1],
+            output: -300,
+        },
     ];
-    let _ = bus.blocking_sync_write_raw(0x2A, &custom_writes); // Write to TARGET_POSITION
+    bus.blocking_sync_write_motor(&motors)
+        .expect("sync motor");
 
-    // Wait for all to complete
-    loop {
-        if let Ok(states) = bus.blocking_sync_read_state(&[1, 2]) {
-            if states.iter().all(|s| {
-                // Check if close enough to target (within tolerance)
-                let target = moves
-                    .iter()
-                    .find(|m| m.id == s.id)
-                    .map(|m| m.position)
-                    .unwrap_or(0);
-                s.position.abs_diff(target) < 5 // 5 step tolerance
-            }) {
-                println!("All servos reached their targets!");
-                break;
+    for &id in &ids {
+        bus.blocking_set_torque_mode(id, TorqueMode::Disable)
+            .expect("torque off");
+    }
+}
+
+fn print_help() -> ! {
+    eprintln!("usage: cargo run --example both_servos -- <port> <baud>");
+    std::process::exit(2)
+}
+
+fn find_two_ids(bus: &mut ScsclBus<StdUart>) -> [u8; 2] {
+    let mut ids = [0u8; 2];
+    let mut count = 0usize;
+    for id in 1..=253 {
+        if bus.blocking_ping(id).is_ok() {
+            ids[count] = id;
+            count += 1;
+            if count == 2 {
+                return ids;
             }
         }
     }
+    panic!("need two servos");
+}
+
+fn temp_ids(ids: [u8; 2]) -> [u8; 2] {
+    let (mut a, mut b) = (252u8, 253u8);
+    if a == ids[0] || a == ids[1] || b == ids[0] || b == ids[1] {
+        a = 250;
+        b = 251;
+    }
+    if a == ids[0] || a == ids[1] || b == ids[0] || b == ids[1] {
+        panic!("no temp ids");
+    }
+    [a, b]
 }

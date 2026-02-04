@@ -24,3 +24,6 @@ defmt = ["dep:defmt"]
 scscl = []
 # Support for SMS/STS series (magnetic encoder, little-endian)
 sms_sts = []
+
+[dev-dependencies]
+serialport = "4"

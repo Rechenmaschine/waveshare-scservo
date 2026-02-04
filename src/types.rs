@@ -1,20 +1,3 @@
-//! Type definitions for SCServo protocol.
-//!
-//! # Position Type Differences
-//!
-//! **Important:** SCSCL and SMS_STS have different position representations:
-//!
-//! - **SCSCL**: Unsigned `u16` (0-1023 steps, potentiometer-based)
-//!   - Use [`ScsclPositionMove`] and [`ScsclServoState`]
-//!   - Physical range: 220° (0.21° per step)
-//!
-//! - **SMS_STS**: Signed `i16` (12-bit magnetic encoder, 4096 positions)
-//!   - Use [`SmsPositionMove`] and [`SmsServoState`]
-//!   - Physical range: 0-4095 steps (360°, 0.088° per step)
-//!   - With offset: Can represent as signed coordinates (e.g., -2048 to +2047)
-//!   - **Note:** Total span is always 4096 positions, offset just shifts the coordinate system
-//!   - Hardware uses bit 15 as sign flag (abstracted away by this library)
-
 /// SCServo protocol instruction types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
