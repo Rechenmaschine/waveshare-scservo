@@ -2,6 +2,7 @@ use embedded_io::ErrorType;
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
 
+#[allow(dead_code)]
 pub struct MockInterface<I> {
     #[allow(dead_code)]
     pub inner: I,
