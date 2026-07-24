@@ -106,6 +106,7 @@ impl TryFrom<u8> for BaudRate {
 pub enum TorqueMode {
     Disable = 0,
     Enable = 1,
+    /// Raw value 2; the Waveshare tables describe this as damping mode.
     Free = 2,
 }
 

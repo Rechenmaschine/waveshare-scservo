@@ -20,10 +20,8 @@ device_driver::create_device!(
             type DefmtFeature = "defmt";
         }
 
-        /// Firmware major version number
-        /// - Min: 0, Max: 253
-        /// - Initial: 0
-        /// - Storage: EPROM
+        /// Firmware major version number.
+        /// - Storage: EPROM (read-only)
         register FW_MAJOR_VERSION {
             const ADDRESS = 0x00;
             const SIZE_BITS = 8;
@@ -33,41 +31,46 @@ device_driver::create_device!(
             version_number: uint = 0..8,
         },
 
-        /// Firmware minor version number
-        /// - Min: 0, Max: 253
-        /// - Initial: 5
-        /// - Storage: EPROM
+        /// Firmware minor version number.
+        /// - Storage: EPROM (read-only)
         register FW_MINOR_VERSION {
             const ADDRESS = 0x01;
             const SIZE_BITS = 8;
             type Access = RO;
-            const RESET_VALUE = 5;
+            const RESET_VALUE = 0;
 
             version_number: uint = 0..8,
         },
 
-        /// Servo major version number
-        /// - Min: 0, Max: 253
-        /// - Initial: 5
-        /// - Storage: EPROM
+        /// Endianness indicator (`1` for big-endian multi-byte values).
+        /// - Storage: EPROM (read-only)
+        register ENDIANNESS {
+            const ADDRESS = 0x02;
+            const SIZE_BITS = 8;
+            type Access = RO;
+            const RESET_VALUE = 1;
+
+            endian: uint = 0..8,
+        },
+
+        /// Servo major version number.
+        /// - Storage: EPROM (read-only)
         register SERVO_MAJOR_VERSION {
             const ADDRESS = 0x03;
             const SIZE_BITS = 8;
             type Access = RO;
-            const RESET_VALUE = 5;
+            const RESET_VALUE = 0;
 
             version_number: uint = 0..8,
         },
 
-        /// Servo minor version number
-        /// - Min: 0, Max: 253
-        /// - Initial: 15
-        /// - Storage: EPROM
+        /// Servo minor version number.
+        /// - Storage: EPROM (read-only)
         register SERVO_MINOR_VERSION {
             const ADDRESS = 0x04;
             const SIZE_BITS = 8;
-            type Access = RW;
-            const RESET_VALUE = 15;
+            type Access = RO;
+            const RESET_VALUE = 0;
 
             version_number: uint = 0..8,
         },
@@ -99,19 +102,6 @@ device_driver::create_device!(
             baudrate: uint as try SharedBaudRate = 0..8,
         },
 
-        /// Return delay in 2µs units
-        /// - Min: 0, Max: 254
-        /// - Initial: 0
-        /// - Storage: EPROM
-        register RETURN_DELAY {
-            const ADDRESS = 0x07;
-            const SIZE_BITS = 8;
-            type Access = RW;
-            const RESET_VALUE = 0;
-
-            delay: uint = 0..8,
-        },
-
         /// Response status level
         /// - 0: Only read/PING return responses
         /// - 1: All commands return responses
@@ -126,7 +116,7 @@ device_driver::create_device!(
         },
 
         /// Minimum angle limit (steps)
-        /// - Min: 0, Max: 1022
+        /// - Min: 0, Max: 1023
         /// - Initial: 20
         /// - Storage: EPROM
         /// Set to 0 for motor/PWM mode
@@ -155,39 +145,39 @@ device_driver::create_device!(
 
         /// Maximum temperature limit (°C)
         /// - Min: 0, Max: 100
-        /// - Initial: 80
+        /// - Initial: 70
         /// - Storage: EPROM
         register MAXIMUM_TEMPERATURE {
             const ADDRESS = 0x0D;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 80;
+            const RESET_VALUE = 70;
 
             temperature: uint = 0..8,
         },
 
         /// Maximum input voltage (0.1V units)
         /// - Min: 0, Max: 254
-        /// - Initial: 90 (9.0V)
+        /// - Initial: model-dependent
         /// - Storage: EPROM
         register MAXIMUM_INPUT_VOLTAGE {
             const ADDRESS = 0x0E;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 90;
+            const RESET_VALUE = 0;
 
             voltage: uint = 0..8,
         },
 
         /// Minimum input voltage (0.1V units)
         /// - Min: 0, Max: 254
-        /// - Initial: 45 (4.5V)
+        /// - Initial: 40 (4.0V) in the generic SC table
         /// - Storage: EPROM
         register MINIMUM_INPUT_VOLTAGE {
             const ADDRESS = 0x0F;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 45;
+            const RESET_VALUE = 40;
 
             voltage: uint = 0..8,
         },
@@ -222,7 +212,7 @@ device_driver::create_device!(
             const ADDRESS = 0x13;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 36;
+            const RESET_VALUE = 0;
 
             voltage: bool = 0,
             temperature: bool = 2,
@@ -235,7 +225,7 @@ device_driver::create_device!(
             const ADDRESS = 0x14;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 37;
+            const RESET_VALUE = 0;
 
             voltage: bool = 0,
             temperature: bool = 2,
@@ -244,36 +234,23 @@ device_driver::create_device!(
 
         /// P (proportional) coefficient
         /// - Min: 0, Max: 254
-        /// - Initial: 15
+        /// - Initial: model-dependent
         /// - Storage: EPROM
         register P_COEFFICIENT {
             const ADDRESS = 0x15;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 15;
+            const RESET_VALUE = 0;
 
             coefficient: uint = 0..8,
         },
 
         /// D (derivative) coefficient
         /// - Min: 0, Max: 254
-        /// - Initial: 15
+        /// - Initial: model-dependent
         /// - Storage: EPROM
         register D_COEFFICIENT {
             const ADDRESS = 0x16;
-            const SIZE_BITS = 8;
-            type Access = RW;
-            const RESET_VALUE = 15;
-
-            coefficient: uint = 0..8,
-        },
-
-        /// I (integral) coefficient
-        /// - Min: 0, Max: 254
-        /// - Initial: 0
-        /// - Storage: EPROM
-        register I_COEFFICIENT {
-            const ADDRESS = 0x17;
             const SIZE_BITS = 8;
             type Access = RW;
             const RESET_VALUE = 0;
@@ -283,19 +260,19 @@ device_driver::create_device!(
 
         /// Minimum starting force (0.1% units)
         /// - Min: 0, Max: 1000
-        /// - Initial: 30
+        /// - Initial: model-dependent
         /// - Storage: EPROM
         register MINIMUM_STARTING_FORCE {
             const ADDRESS = 0x18;
             const SIZE_BITS = 16;
             type Access = RW;
-            const RESET_VALUE = 30;
+            const RESET_VALUE = 0;
 
             force: uint = 0..16,
         },
 
         /// Clockwise insensitive zone (steps)
-        /// - Min: 0, Max: 32
+        /// - Min: 0, Max: 16
         /// - Initial: 1
         /// - Storage: EPROM
         register CLOCKWISE_INSENSITIVE_ZONE {
@@ -308,7 +285,7 @@ device_driver::create_device!(
         },
 
         /// Anticlockwise insensitive zone (steps)
-        /// - Min: 0, Max: 32
+        /// - Min: 0, Max: 16
         /// - Initial: 1
         /// - Storage: EPROM
         register ANTICLOCKWISE_INSENSITIVE_ZONE {
@@ -320,21 +297,8 @@ device_driver::create_device!(
             zone: uint = 0..8,
         },
 
-        /// Hysteresis loop (steps)
-        /// - Min: 0, Max: 32
-        /// - Initial: 1
-        /// - Storage: EPROM
-        register HYSTERESIS_LOOP {
-            const ADDRESS = 0x1C;
-            const SIZE_BITS = 8;
-            type Access = RW;
-            const RESET_VALUE = 1;
-
-            hysteresis_loop: uint = 0..8,
-        },
-
         /// Protection torque (1.0% units)
-        /// - Min: 0, Max: 100
+        /// - Min: 0, Max: 254
         /// - Initial: 20
         /// - Storage: EPROM
         register PROTECTION_TORQUE {
@@ -346,21 +310,21 @@ device_driver::create_device!(
             torque: uint = 0..8,
         },
 
-        /// Protection time (40ms units)
+        /// Protection time (10ms units)
         /// - Min: 0, Max: 254
-        /// - Initial: 100 (4 seconds)
+        /// - Initial: 200 (2 seconds)
         /// - Storage: EPROM
         register PROTECTION_TIME {
             const ADDRESS = 0x26;
             const SIZE_BITS = 8;
             type Access = RW;
-            const RESET_VALUE = 100;
+            const RESET_VALUE = 200;
 
             time: uint = 0..8,
         },
 
         /// Overload torque threshold (1.0% units)
-        /// - Min: 0, Max: 100
+        /// - Min: 0, Max: 254
         /// - Initial: 80
         /// - Storage: EPROM
         register OVERLOAD_TORQUE {
@@ -373,9 +337,9 @@ device_driver::create_device!(
         },
 
         /// Torque switch
-        /// - 0: Disable (damping state)
+        /// - 0: Disable/free output
         /// - 1: Enable
-        /// - 2: Free state
+        /// - 2: Damping state
         /// - Storage: SRAM
         register TORQUE_SWITCH {
             const ADDRESS = 0x28;
@@ -545,9 +509,10 @@ device_driver::create_device!(
             flag: bool = 0,
         },
 
-        /// Current draw (mA, signed with bit 15)
-        /// - Storage: SRAM (read-only)
-        /// - Address: 0x45-0x46
+        /// Current draw (signed raw value with bit 15).
+        ///
+        /// This register is present on some SCSCL firmware variants at
+        /// addresses 0x45-0x46; it is outside the generic Waveshare SC table.
         register CURRENT_CURRENT {
             const ADDRESS = 0x45;
             const SIZE_BITS = 16;
@@ -556,6 +521,7 @@ device_driver::create_device!(
 
             current: uint = 0..16,
         },
+
     }
 );
 
@@ -588,4 +554,3 @@ where
         self.lock_flag().write_async(|w| w.set_locked(false)).await
     }
 }
-
