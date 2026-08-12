@@ -37,14 +37,11 @@ pub struct ScsclPositionMove {
 pub struct SmsPositionMove {
     /// Servo ID.
     pub id: u8,
-    /// Target position in `steps` (12-bit encoder: 0-4095, or offset-adjusted signed range).
-    ///
-    /// **Default (no offset):** 0 to 4095
-    ///
-    /// **With offset:** Can use signed coordinates, but span is always 4096 positions.
-    /// Example: offset=2048 gives range -2048 to +2047.
+    /// Target position in signed protocol steps (`-32767..=32767`).
+    /// The effective mechanical range depends on the servo model and mode.
     pub position: i16,
-    /// Movement time in `milliseconds` (0 = use speed parameter).
+    /// Retained for source compatibility. SMS/ST position commands write zero
+    /// to address `0x2C`; PWM output uses a raw register write in PWM mode.
     pub time: u16,
     /// Movement speed in `steps/second`.
     pub speed: u16,
@@ -53,7 +50,7 @@ pub struct SmsPositionMove {
 /// Position move command with acceleration for SMS_STS series.
 ///
 /// Used with [`SmsStsBus::blocking_sync_write_position_ex`](crate::SmsStsBus::blocking_sync_write_position_ex).
-/// Writes to ACCELERATION register (0x29) + position/time/speed.
+/// Writes to ACCELERATION register (0x29) + position/zero-goal-time/speed.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmsPositionMoveEx {
@@ -61,12 +58,29 @@ pub struct SmsPositionMoveEx {
     pub id: u8,
     /// Acceleration value (0-254).
     pub acceleration: u8,
-    /// Target position in `steps` (12-bit encoder: 0-4095, or offset-adjusted signed range).
+    /// Target position in signed protocol steps (`-32767..=32767`).
+    /// The effective mechanical range depends on the servo model and mode.
     pub position: i16,
-    /// Movement time in `milliseconds` (0 = use speed parameter).
+    /// Retained for source compatibility. SMS/ST position commands write zero
+    /// to address `0x2C`; PWM output uses a raw register write in PWM mode.
     pub time: u16,
     /// Movement speed in `steps/second`.
     pub speed: u16,
+}
+
+/// Operating modes supported by SMS/ST servos.
+#[cfg(feature = "sms_sts")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum SmsStsOperatingMode {
+    /// Closed-loop position control.
+    Position,
+    /// Continuous-rotation wheel/motor control.
+    Wheel,
+    /// Open-loop PWM control.
+    PwmOpenLoop,
+    /// Step control.
+    Step,
 }
 
 /// Speed command for wheel mode (SMS_STS series).
@@ -83,7 +97,7 @@ pub struct SmsSpeedCommand {
     pub acceleration: u8,
 }
 
-/// Torque mode command for sync writes.
+/// Torque/damping mode command for sync writes.
 ///
 /// Used with [`SmsStsBus::blocking_sync_write_torque_mode`](crate::SmsStsBus::blocking_sync_write_torque_mode)
 /// and [`ScsclBus::blocking_sync_write_torque_mode`](crate::ScsclBus::blocking_sync_write_torque_mode).
@@ -92,7 +106,7 @@ pub struct SmsSpeedCommand {
 pub struct TorqueModeCommand {
     /// Servo ID.
     pub id: u8,
-    /// Torque mode (Enable/Disable/Free/Calibration).
+    /// Torque mode (Enable/Disable/Free-or-damping, raw values 1/0/2).
     pub mode: crate::TorqueMode,
 }
 
@@ -138,12 +152,12 @@ pub struct SyncWriteData<const DATA_LEN: usize> {
     pub data: [u8; DATA_LEN],
 }
 
-
 /// Servo status flags.
 ///
-/// Returned by [`blocking_read_status`](crate::ScsclBus::blocking_read_status).
+/// Returned by the series-specific `blocking_read_status` methods.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ScsStatus {
     /// Servo ID.
     pub id: u8,
@@ -153,6 +167,10 @@ pub struct ScsStatus {
     pub temperature_error: bool,
     /// Load exceeds configured torque limit.
     pub overload_error: bool,
+    /// Magnetic encoder fault; always false for SCSCL.
+    pub magnetic_error: bool,
+    /// Over-current fault; always false for SCSCL.
+    pub current_error: bool,
 }
 
 /// SCSCL servo state from sync read.
@@ -183,30 +201,35 @@ pub struct ScsclServoState {
 impl ScsclServoState {
     /// Get position in steps (0-1023 for SCSCL).
     #[inline]
+    #[must_use]
     pub fn position(&self) -> u16 {
         self.position_raw
     }
 
     /// Get speed in steps/second (signed, negative = CCW).
     #[inline]
+    #[must_use]
     pub fn speed(&self) -> i16 {
         self.speed_raw
     }
 
     /// Get load as percentage (-100.0 to +100.0, negative = CCW).
     #[inline]
+    #[must_use]
     pub fn load(&self) -> f32 {
-        self.load_raw as f32 * 0.1
+        f32::from(self.load_raw) * 0.1
     }
 
     /// Get voltage in volts.
     #[inline]
+    #[must_use]
     pub fn voltage(&self) -> f32 {
-        self.voltage_raw as f32 * 0.1
+        f32::from(self.voltage_raw) * 0.1
     }
 
     /// Get temperature in degrees Celsius.
     #[inline]
+    #[must_use]
     pub fn temperature(&self) -> u8 {
         self.temperature_raw
     }
@@ -224,7 +247,7 @@ impl ScsclServoState {
 pub struct SmsServoState {
     /// Servo ID.
     pub id: u8,
-    /// Current position in `steps` (12-bit encoder: 0-4095).
+    /// Current position in signed protocol steps.
     pub position_raw: i16,
     /// Current speed in `steps/second` (signed, negative = CCW).
     pub speed_raw: i16,
@@ -238,34 +261,38 @@ pub struct SmsServoState {
 }
 
 impl SmsServoState {
-    /// Get position in steps (12-bit encoder: 0-4095).
+    /// Get position in signed protocol steps.
     #[inline]
+    #[must_use]
     pub fn position(&self) -> i16 {
         self.position_raw
     }
 
     /// Get speed in steps/second (signed, negative = CCW).
     #[inline]
+    #[must_use]
     pub fn speed(&self) -> i16 {
         self.speed_raw
     }
 
     /// Get load as percentage (-100.0 to +100.0, negative = CCW).
     #[inline]
+    #[must_use]
     pub fn load(&self) -> f32 {
-        self.load_raw as f32 * 0.1
+        f32::from(self.load_raw) * 0.1
     }
 
     /// Get voltage in volts.
     #[inline]
+    #[must_use]
     pub fn voltage(&self) -> f32 {
-        self.voltage_raw as f32 * 0.1
+        f32::from(self.voltage_raw) * 0.1
     }
 
     /// Get temperature in degrees Celsius.
     #[inline]
+    #[must_use]
     pub fn temperature(&self) -> u8 {
         self.temperature_raw
     }
 }
-

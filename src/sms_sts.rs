@@ -7,12 +7,10 @@ use crate::registers::sts_device::{OperatingMode, SmsStsDevice, TorqueMode as Sm
 use crate::series::{ServoMode, ServoTelemetry};
 use crate::types::{
     ScsStatus, SmsPositionMove, SmsPositionMoveEx, SmsServoState, SmsSpeedCommand,
-    SmsTorqueLimitCommand, SyncWriteData, TorqueModeCommand,
+    SmsStsOperatingMode, SmsTorqueLimitCommand, SyncWriteData, TorqueModeCommand,
 };
 use crate::uart::UartBusInterface;
-use crate::{
-    registers, TorqueMode, VersionInformation,
-};
+use crate::{TorqueMode, VersionInformation, registers};
 use crate::{decode_current, decode_load, decode_speed};
 use embedded_io::{Read as BlockingRead, Write as BlockingWrite};
 use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
@@ -67,11 +65,29 @@ impl<I> core::ops::DerefMut for BusIdGuard<'_, I> {
     }
 }
 
-fn encode_position_payload(position: i16, time: u16, speed: u16) -> [u8; 6] {
-    let p = encode_signed_position(position).to_le_bytes();
-    let t = time.to_le_bytes();
+fn with_blocking_eeprom<I, T, F>(
+    device: &mut SmsStsDevice<UartBusInterface<I>>,
+    operation: F,
+) -> Result<T, ProtocolError<I::Error>>
+where
+    I: BlockingRead + BlockingWrite,
+    F: FnOnce(&mut SmsStsDevice<UartBusInterface<I>>) -> Result<T, ProtocolError<I::Error>>,
+{
+    device.blocking_unlock_eeprom()?;
+    let operation_result = operation(device);
+    let lock_result = device.blocking_lock_eeprom();
+
+    match (operation_result, lock_result) {
+        (Err(operation_error), _) => Err(operation_error),
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(lock_error)) => Err(lock_error),
+    }
+}
+
+fn encode_position_payload(position: i16, _time: u16, speed: u16) -> Option<[u8; 6]> {
+    let p = encode_signed_position(position)?.to_le_bytes();
     let s = speed.to_le_bytes();
-    [p[0], p[1], t[0], t[1], s[0], s[1]]
+    Some([p[0], p[1], 0, 0, s[0], s[1]])
 }
 
 fn fill_sync_position_payload<E>(
@@ -81,17 +97,17 @@ fn fill_sync_position_payload<E>(
     let data_len: u8 = 6;
     let mut offset = 0;
     for m in moves {
+        let p = encode_signed_position(m.position).ok_or(ProtocolError::InvalidSetting)?;
         if offset + 7 > payload.len() {
             return Err(ProtocolError::InvalidLength);
         }
         payload[offset] = m.id;
-        let p = encode_signed_position(m.position).to_le_bytes();
-        let t = m.time.to_le_bytes();
+        let p = p.to_le_bytes();
         let s = m.speed.to_le_bytes();
         payload[offset + 1] = p[0];
         payload[offset + 2] = p[1];
-        payload[offset + 3] = t[0];
-        payload[offset + 4] = t[1];
+        payload[offset + 3] = 0;
+        payload[offset + 4] = 0;
         payload[offset + 5] = s[0];
         payload[offset + 6] = s[1];
         offset += 7;
@@ -106,18 +122,21 @@ fn fill_sync_position_ex_payload<E>(
     let data_len: u8 = 7; // Includes acceleration byte
     let mut offset = 0;
     for m in moves {
+        if m.acceleration > 254 {
+            return Err(ProtocolError::InvalidSetting);
+        }
+        let p = encode_signed_position(m.position).ok_or(ProtocolError::InvalidSetting)?;
         if offset + 8 > payload.len() {
             return Err(ProtocolError::InvalidLength);
         }
         payload[offset] = m.id;
         payload[offset + 1] = m.acceleration;
-        let p = encode_signed_position(m.position).to_le_bytes();
-        let t = m.time.to_le_bytes();
+        let p = p.to_le_bytes();
         let s = m.speed.to_le_bytes();
         payload[offset + 2] = p[0];
         payload[offset + 3] = p[1];
-        payload[offset + 4] = t[0];
-        payload[offset + 5] = t[1];
+        payload[offset + 4] = 0;
+        payload[offset + 5] = 0;
         payload[offset + 6] = s[0];
         payload[offset + 7] = s[1];
         offset += 8;
@@ -125,11 +144,34 @@ fn fill_sync_position_ex_payload<E>(
     Ok((data_len, offset))
 }
 
-fn encode_signed_speed(speed: i16) -> u16 {
+fn encode_signed_speed(speed: i16) -> Option<u16> {
+    let magnitude = speed.unsigned_abs();
+    if magnitude > BIT_15_VALUE {
+        return None;
+    }
     if speed < 0 {
-        BIT_15_SIGN | ((-speed) as u16 & BIT_15_VALUE)
+        Some(BIT_15_SIGN | magnitude)
     } else {
-        speed as u16
+        Some(magnitude)
+    }
+}
+
+fn from_register_operating_mode(mode: OperatingMode) -> Option<SmsStsOperatingMode> {
+    match mode {
+        OperatingMode::Position => Some(SmsStsOperatingMode::Position),
+        OperatingMode::Wheel => Some(SmsStsOperatingMode::Wheel),
+        OperatingMode::PwmOpenLoop => Some(SmsStsOperatingMode::PwmOpenLoop),
+        OperatingMode::Step => Some(SmsStsOperatingMode::Step),
+        OperatingMode::Unknown(_) => None,
+    }
+}
+
+fn to_register_operating_mode(mode: SmsStsOperatingMode) -> OperatingMode {
+    match mode {
+        SmsStsOperatingMode::Position => OperatingMode::Position,
+        SmsStsOperatingMode::Wheel => OperatingMode::Wheel,
+        SmsStsOperatingMode::PwmOpenLoop => OperatingMode::PwmOpenLoop,
+        SmsStsOperatingMode::Step => OperatingMode::Step,
     }
 }
 
@@ -146,6 +188,10 @@ fn fill_sync_speed_payload<E>(
     let data_len: u8 = 7;
     let mut offset = 0;
     for cmd in commands {
+        if cmd.acceleration > 254 {
+            return Err(ProtocolError::InvalidSetting);
+        }
+        let s = encode_signed_speed(cmd.speed).ok_or(ProtocolError::InvalidSetting)?;
         if offset + 8 > payload.len() {
             return Err(ProtocolError::InvalidLength);
         }
@@ -158,7 +204,7 @@ fn fill_sync_speed_payload<E>(
         payload[offset + 4] = 0;
         payload[offset + 5] = 0;
         // Speed (2 bytes, little-endian, signed with bit 15)
-        let s = encode_signed_speed(cmd.speed).to_le_bytes();
+        let s = s.to_le_bytes();
         payload[offset + 6] = s[0];
         payload[offset + 7] = s[1];
         offset += 8;
@@ -190,6 +236,9 @@ fn fill_sync_torque_limit_payload<E>(
     let data_len: u8 = 2; // Torque limit is 2 bytes
     let mut offset = 0;
     for cmd in commands {
+        if cmd.limit > crate::MAX_TORQUE_VALUE {
+            return Err(ProtocolError::InvalidSetting);
+        }
         if offset + 3 > payload.len() {
             return Err(ProtocolError::InvalidLength);
         }
@@ -221,26 +270,54 @@ fn parse_state_chunk(id: u8, chunk: &[u8]) -> SmsServoState {
 
 /// Encode signed position to hardware format (bit 15 = sign) for SMS_STS.
 ///
-/// The SMS_STS uses a 12-bit magnetic encoder providing 4096 positions (0-4095).
-/// The hardware protocol uses bit 15 of a 16-bit value as a sign flag to support
-/// offset-adjusted coordinate systems.
+/// The hardware protocol uses bit 15 of a 16-bit value as a sign flag. The
+/// target-position register accepts magnitudes up to 32767.
 ///
 /// **Hardware encoding:**
-/// - Positive: `0x0000` to `0x0FFF` (0 to 4095)
-/// - Negative: `0x8001` to `0x8FFF` (-1 to -4095, bit 15 set)
-///
-/// **Position range depends on offset:**
-/// - offset=0: Valid range 0 to 4095 (default)
-/// - offset=2048: Valid range -2048 to +2047 (centered)
-/// - offset=4095: Valid range -4095 to 0 (inverted)
-///
-/// The total span is always 4096 positions (12-bit encoder limitation).
-fn encode_signed_position(position: i16) -> u16 {
-    if position < 0 {
-        BIT_15_SIGN | ((-position) as u16 & BIT_15_VALUE)
-    } else {
-        position as u16
+/// - Positive: `0x0000` to `0x7FFF` (0 to 32767)
+/// - Negative: `0x8001` to `0xFFFF` (-1 to -32767, bit 15 set)
+fn encode_signed_position(position: i16) -> Option<u16> {
+    let magnitude = position.unsigned_abs();
+    if magnitude > BIT_15_VALUE {
+        return None;
     }
+    if position < 0 {
+        Some(BIT_15_SIGN | magnitude)
+    } else {
+        Some(magnitude)
+    }
+}
+
+fn encode_offset(offset: i16) -> Option<u16> {
+    let magnitude = offset.unsigned_abs();
+    if magnitude > 4095 {
+        return None;
+    }
+    if offset >= 0 {
+        if magnitude < 2048 {
+            Some(magnitude)
+        } else {
+            Some(0x1000 | (magnitude - 2048))
+        }
+    } else if magnitude < 2048 {
+        Some(0x0800 | magnitude)
+    } else {
+        Some(0x1800 | (magnitude - 2048))
+    }
+}
+
+fn decode_offset(raw: u16) -> Option<i16> {
+    if raw > 0x1FFF {
+        return None;
+    }
+    let magnitude = raw & 0x07FF;
+    #[allow(clippy::cast_possible_wrap)]
+    Some(match raw & 0x1800 {
+        0x0000 => magnitude as i16,
+        0x0800 => -(magnitude as i16),
+        0x1000 => (magnitude + 2048) as i16,
+        _ => -((magnitude + 2048) as i16),
+    })
 }
 
 /// Decode signed position from hardware format (bit 15 = sign) for SMS_STS.
@@ -267,14 +344,25 @@ impl<I> SmsStsBus<I> {
     pub fn inner_mut(&mut self) -> &mut SmsStsDevice<UartBusInterface<I>> {
         &mut self.device
     }
+
+    /// Configure whether unicast write-like commands are expected to reply.
+    ///
+    /// Response level 1 is the default. Set this to `false` when the servo's
+    /// response status level is 0; READ and PING still expect replies.
+    pub fn set_response_status_level(&mut self, enabled: bool) {
+        self.device.interface.set_response_status_level(enabled);
+    }
 }
 
 impl<I> SmsStsBus<I>
 where
     I: BlockingRead + BlockingWrite,
 {
-    /// Read version information.
-    pub fn blocking_read_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    /// Read firmware and servo version bytes.
+    pub fn blocking_read_version(
+        &mut self,
+        id: u8,
+    ) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(VersionInformation {
             firmware_major: device.fw_major_version().read()?.version_number(),
@@ -284,7 +372,7 @@ where
         })
     }
 
-    /// Ping a servo.
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub fn blocking_ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -298,16 +386,33 @@ where
     }
 
     /// Change a servo's ID.
-    pub fn blocking_set_id(&mut self, current_id: u8, new_id: u8) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_id(
+        &mut self,
+        current_id: u8,
+        new_id: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if current_id > crate::MAX_SERVO_ID || new_id > crate::MAX_SERVO_ID {
+            return Err(ProtocolError::InvalidId);
+        }
         let mut device = BusIdGuard::new(&mut self.device, current_id);
         device.blocking_unlock_eeprom()?;
-        device.id().write(|w| w.set_id(new_id))?;
+        if let Err(error) = device.id().write(|w| w.set_id(new_id)) {
+            let _ = device.blocking_lock_eeprom();
+            return Err(error);
+        }
+        // The servo starts answering at its new ID immediately after the ID
+        // register is written, so the lock command must use that ID too.
+        device.interface.set_busid(new_id);
         device.blocking_lock_eeprom()?;
         Ok(())
     }
 
     /// Set torque mode.
-    pub fn blocking_set_torque_mode(&mut self, id: u8, mode: TorqueMode) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_torque_mode(
+        &mut self,
+        id: u8,
+        mode: TorqueMode,
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         // Convert shared TorqueMode to SMS_STS TorqueMode
         let sms_mode = match mode {
@@ -322,85 +427,135 @@ where
     /// Set angle limits.
     ///
     /// **Units:** `min`, `max` = `steps` (0-4095)
-    pub fn blocking_set_angle_limits(&mut self, id: u8, min: u16, max: u16) -> Result<(), ProtocolError<I::Error>> {
-        if min > max {
+    pub fn blocking_set_angle_limits(
+        &mut self,
+        id: u8,
+        min: u16,
+        max: u16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if (min != 0 || max != 0)
+            && (min >= max || max > crate::sms_sts_constants::SMS_STS_MAX_POSITION_STEPS)
+        {
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.minimum_angle().write(|w| w.set_angle(min))?;
-        device.maximum_angle().write(|w| w.set_angle(max))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device.minimum_angle().write(|w| w.set_angle(min))?;
+            device.maximum_angle().write(|w| w.set_angle(max))?;
+            Ok(())
+        })
     }
 
     /// Set voltage limits.
     ///
     /// **Units:** `min_voltage`, `max_voltage` = `0.1V` units (120 = 12.0V)
-    pub fn blocking_set_voltage_limits(&mut self, id: u8, min_voltage: u8, max_voltage: u8) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_voltage_limits(
+        &mut self,
+        id: u8,
+        min_voltage: u8,
+        max_voltage: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if min_voltage > 254 || max_voltage > 254 || min_voltage > max_voltage {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.minimum_input_voltage().write(|w| w.set_voltage(min_voltage))?;
-        device.maximum_input_voltage().write(|w| w.set_voltage(max_voltage))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .minimum_input_voltage()
+                .write(|w| w.set_voltage(min_voltage))?;
+            device
+                .maximum_input_voltage()
+                .write(|w| w.set_voltage(max_voltage))?;
+            Ok(())
+        })
     }
 
     /// Set maximum temperature limit.
     ///
     /// **Units:** `max_temp` = `°C`
-    pub fn blocking_set_max_temperature_limit(&mut self, id: u8, max_temp: u8) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_max_temperature_limit(
+        &mut self,
+        id: u8,
+        max_temp: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if max_temp > 100 {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.maximum_temperature().write(|w| w.set_temperature(max_temp))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .maximum_temperature()
+                .write(|w| w.set_temperature(max_temp))?;
+            Ok(())
+        })
     }
 
     /// Set maximum torque.
     ///
     /// **Units:** `max_torque` = `0.1%` units (500 = 50.0%, max 1000 = 100%)
-    pub fn blocking_set_max_torque(&mut self, id: u8, max_torque: u16) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_max_torque(
+        &mut self,
+        id: u8,
+        max_torque: u16,
+    ) -> Result<(), ProtocolError<I::Error>> {
         if max_torque > crate::MAX_TORQUE_VALUE {
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.maximum_torque().write(|w| w.set_torque(max_torque))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .maximum_torque()
+                .write(|w| w.set_torque(max_torque))?;
+            Ok(())
+        })
     }
 
     /// Set PID coefficients.
     ///
     /// **Units:** `kp`, `kd`, `ki` = unitless (0-254)
-    pub fn blocking_set_pid_coefficients(&mut self, id: u8, kp: u8, kd: u8, ki: u8) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_pid_coefficients(
+        &mut self,
+        id: u8,
+        kp: u8,
+        kd: u8,
+        ki: u8,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        if kp > 254 || kd > 254 || ki > 254 {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.p_coefficient().write(|w| w.set_coefficient(kp))?;
-        device.d_coefficient().write(|w| w.set_coefficient(kd))?;
-        device.i_coefficient().write(|w| w.set_coefficient(ki))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device.p_coefficient().write(|w| w.set_coefficient(kp))?;
+            device.d_coefficient().write(|w| w.set_coefficient(kd))?;
+            device.i_coefficient().write(|w| w.set_coefficient(ki))?;
+            Ok(())
+        })
     }
 
     /// Write target position.
     ///
     /// Requires torque enabled first.
     ///
-    /// **Units:** `position` = `steps` (12-bit encoder: 0-4095)
+    /// **Units:** `position` = signed protocol steps (`-32767..=32767`)
     ///
     /// **See also:** [`blocking_sync_write_position`](Self::blocking_sync_write_position),
     /// [`blocking_reg_write_position`](Self::blocking_reg_write_position) + [`blocking_action`](Self::blocking_action)
-    pub fn blocking_write_position(&mut self, id: u8, position: i16) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_write_position(
+        &mut self,
+        id: u8,
+        position: i16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let position = encode_signed_position(position).ok_or(ProtocolError::InvalidSetting)?;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.target_position().write(|w| w.set_position(encode_signed_position(position)))?;
+        device
+            .target_position()
+            .write(|w| w.set_position(position))?;
         Ok(())
     }
 
     /// Read current position in steps.
     ///
-    /// **Units:** Returns `steps` (12-bit encoder: 0-4095)
+    /// **Units:** Returns signed protocol steps.
     pub fn blocking_read_position(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read()?.position();
@@ -441,7 +596,7 @@ where
 
     /// Read current draw.
     ///
-    /// **Units:** Returns `mA` (likely)
+    /// **Units:** Returns signed current counts. SMS/ST uses 6.5 mA per count.
     pub fn blocking_read_current(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_current(device.current_current().read()?.current()))
@@ -456,6 +611,8 @@ where
             voltage_error: status.voltage(),
             temperature_error: status.temperature(),
             overload_error: status.overload(),
+            magnetic_error: status.magnetic(),
+            current_error: status.current(),
         })
     }
 
@@ -465,25 +622,58 @@ where
         Ok(device.move_flag().read()?.flag())
     }
 
-    /// Read servo mode (position or wheel).
+    /// Read servo mode as the generic position-or-wheel mode.
+    ///
+    /// Returns [`ProtocolError::InvalidSetting`] for PWM-open-loop, step, or
+    /// unrecognized SMS/ST modes. Use [`blocking_read_operating_mode`](Self::blocking_read_operating_mode)
+    /// to read all supported SMS/ST modes.
     pub fn blocking_read_mode(&mut self, id: u8) -> Result<ServoMode, ProtocolError<I::Error>> {
-        let mut device = BusIdGuard::new(&mut self.device, id);
-        match device.mode().read()?.mode() {
-            OperatingMode::Wheel => Ok(ServoMode::Wheel),
-            _ => Ok(ServoMode::Position),
+        match self.blocking_read_operating_mode(id)? {
+            SmsStsOperatingMode::Wheel => Ok(ServoMode::Wheel),
+            SmsStsOperatingMode::Position => Ok(ServoMode::Position),
+            SmsStsOperatingMode::PwmOpenLoop | SmsStsOperatingMode::Step => {
+                Err(ProtocolError::InvalidSetting)
+            }
         }
     }
 
-    /// Set servo operating mode.
-    pub fn blocking_set_operating_mode(&mut self, id: u8, mode: ServoMode) -> Result<(), ProtocolError<I::Error>> {
+    /// Read all supported SMS/ST operating modes.
+    pub fn blocking_read_operating_mode(
+        &mut self,
+        id: u8,
+    ) -> Result<SmsStsOperatingMode, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        match mode {
-            ServoMode::Wheel => device.mode().write(|w| w.set_mode(OperatingMode::Wheel))?,
-            ServoMode::Position => device.mode().write(|w| w.set_mode(OperatingMode::Position))?,
-        }
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        from_register_operating_mode(device.mode().read()?.mode())
+            .ok_or(ProtocolError::InvalidSetting)
+    }
+
+    /// Set an SMS/ST operating mode, including PWM-open-loop and step modes.
+    pub fn blocking_set_sms_sts_operating_mode(
+        &mut self,
+        id: u8,
+        mode: SmsStsOperatingMode,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let mode = to_register_operating_mode(mode);
+        with_blocking_eeprom(&mut device, |device| {
+            device.mode().write(|w| w.set_mode(mode))?;
+            Ok(())
+        })
+    }
+
+    /// Set servo operating mode.
+    pub fn blocking_set_operating_mode(
+        &mut self,
+        id: u8,
+        mode: ServoMode,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.blocking_set_sms_sts_operating_mode(
+            id,
+            match mode {
+                ServoMode::Wheel => SmsStsOperatingMode::Wheel,
+                ServoMode::Position => SmsStsOperatingMode::Position,
+            },
+        )
     }
 
     /// Calibrate offset (SMS_STS specific).
@@ -493,14 +683,16 @@ where
     /// or [`blocking_set_offset`](Self::blocking_set_offset) to manually set an offset.
     pub fn blocking_calibrate(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.torque_switch().write(|w| w.set_mode(SmsTorqueMode::Calibration))?;
+        device
+            .torque_switch()
+            .write(|w| w.set_mode(SmsTorqueMode::Calibration))?;
         Ok(())
     }
 
     /// Read position offset.
     ///
     /// The offset shifts the coordinate system. The servo's 12-bit encoder provides 4096
-    /// positions (0-4095). With an offset, you can center this range around any point.
+    /// positions (0-4095). An offset can center this range around any point.
     ///
     /// **Examples:**
     /// - offset=0: positions 0 to 4095
@@ -511,30 +703,35 @@ where
     pub fn blocking_read_offset(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let offset_raw = device.offset().read()?.offset();
-        Ok(offset_raw as i16)
+        decode_offset(offset_raw).ok_or(ProtocolError::InvalidSetting)
     }
 
     /// Set position offset.
     ///
     /// Manually sets the position offset value. This shifts the coordinate system.
-    /// The servo's 12-bit encoder provides 4096 positions (0-4095). With an offset,
-    /// you can center this range around any point.
+    /// The servo's 12-bit encoder provides 4096 positions (0-4095). An offset
+    /// can center this range around any point.
     ///
     /// **Examples:**
     /// - offset=0: positions 0 to 4095 (default)
     /// - offset=2048: positions -2048 to +2047 (centered)
     /// - offset=4095: positions -4095 to 0
     ///
-    /// Alternatively, use [`blocking_calibrate`](Self::blocking_calibrate) to automatically
-    /// calibrate the offset to the current position.
+    /// [`blocking_calibrate`](Self::blocking_calibrate) calibrates the offset to the
+    /// current position automatically.
     ///
     /// **Units:** `offset` = `steps` (signed)
-    pub fn blocking_set_offset(&mut self, id: u8, offset: i16) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_set_offset(
+        &mut self,
+        id: u8,
+        offset: i16,
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.offset().write(|w| w.set_offset(offset as u16))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        let encoded = encode_offset(offset).ok_or(ProtocolError::InvalidSetting)?;
+        with_blocking_eeprom(&mut device, |device| {
+            device.offset().write(|w| w.set_offset(encoded))?;
+            Ok(())
+        })
     }
 
     /// Trigger registered actions.
@@ -545,28 +742,49 @@ where
     /// Queue position command for deferred execution.
     ///
     /// **Units:**
-    /// - `position` = `steps` (12-bit encoder: 0-4095)
-    /// - `time` = `milliseconds`
+    /// - `position` = signed protocol steps (`-32767..=32767`)
+    /// - `time` = retained API parameter; position commands write zero to goal-time
     /// - `speed` = `steps/second`
     ///
     /// **See also:** [`blocking_action`](Self::blocking_action)
-    pub fn blocking_reg_write_position(&mut self, id: u8, position: i16, time: u16, speed: u16) -> Result<(), ProtocolError<I::Error>> {
-        let data = encode_position_payload(position, time, speed);
-        self.device.interface.blocking_reg_write(id, registers::addr::TARGET_POSITION, &data)
+    pub fn blocking_reg_write_position(
+        &mut self,
+        id: u8,
+        position: i16,
+        _time: u16,
+        speed: u16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let data =
+            encode_position_payload(position, 0, speed).ok_or(ProtocolError::InvalidSetting)?;
+        self.device
+            .interface
+            .blocking_reg_write(id, registers::addr::TARGET_POSITION, &data)
     }
 
     /// Move multiple servos simultaneously.
-    pub fn blocking_sync_write_position<const SIZE: usize>(&mut self, moves: &[SmsPositionMove; SIZE]) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_sync_write_position<const SIZE: usize>(
+        &mut self,
+        moves: &[SmsPositionMove; SIZE],
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_position_payload(moves, &mut payload)?;
-        self.device.interface.blocking_sync_write(registers::addr::TARGET_POSITION, data_len, &payload[..offset])
+        self.device.interface.blocking_sync_write(
+            registers::addr::TARGET_POSITION,
+            data_len,
+            &payload[..offset],
+        )
     }
 
     /// Move multiple servos simultaneously with acceleration control.
-    pub fn blocking_sync_write_position_ex<const SIZE: usize>(&mut self, moves: &[SmsPositionMoveEx; SIZE]) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_sync_write_position_ex<const SIZE: usize>(
+        &mut self,
+        moves: &[SmsPositionMoveEx; SIZE],
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_position_ex_payload(moves, &mut payload)?;
-        self.device.interface.blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
+        self.device
+            .interface
+            .blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
     }
 
     /// Set speed for multiple servos in wheel mode simultaneously.
@@ -579,28 +797,43 @@ where
     ///
     /// This follows the SMS_STS protocol specification where speed control
     /// uses the same register layout as position control (SyncWritePosEx in C reference).
-    pub fn blocking_sync_write_speed<const SIZE: usize>(&mut self, commands: &[SmsSpeedCommand; SIZE]) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_sync_write_speed<const SIZE: usize>(
+        &mut self,
+        commands: &[SmsSpeedCommand; SIZE],
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_speed_payload(commands, &mut payload)?;
-        self.device.interface.blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
+        self.device
+            .interface
+            .blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
     }
 
     /// Set torque mode for multiple servos simultaneously.
     ///
-    /// Writes torque mode (Enable/Disable/Free/Calibration) in a single broadcast packet.
-    pub fn blocking_sync_write_torque_mode<const SIZE: usize>(&mut self, commands: &[TorqueModeCommand; SIZE]) -> Result<(), ProtocolError<I::Error>> {
+    /// Writes torque mode (Enable/Disable/Free) in a single broadcast packet.
+    pub fn blocking_sync_write_torque_mode<const SIZE: usize>(
+        &mut self,
+        commands: &[TorqueModeCommand; SIZE],
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_torque_mode_payload(commands, &mut payload)?;
-        self.device.interface.blocking_sync_write(addr::TORQUE_SWITCH, data_len, &payload[..offset])
+        self.device
+            .interface
+            .blocking_sync_write(addr::TORQUE_SWITCH, data_len, &payload[..offset])
     }
 
     /// Set runtime torque limit for multiple servos simultaneously.
     ///
     /// **Units:** `limit` = `0.1%` units (500 = 50.0%, max 1000 = 100%)
-    pub fn blocking_sync_write_torque_limit<const SIZE: usize>(&mut self, commands: &[SmsTorqueLimitCommand; SIZE]) -> Result<(), ProtocolError<I::Error>> {
+    pub fn blocking_sync_write_torque_limit<const SIZE: usize>(
+        &mut self,
+        commands: &[SmsTorqueLimitCommand; SIZE],
+    ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_torque_limit_payload(commands, &mut payload)?;
-        self.device.interface.blocking_sync_write(addr::TORQUE_LIMIT, data_len, &payload[..offset])
+        self.device
+            .interface
+            .blocking_sync_write(addr::TORQUE_LIMIT, data_len, &payload[..offset])
     }
 
     /// Generic sync write to any register address.
@@ -636,17 +869,34 @@ where
             offset += 1 + DATA_LEN;
         }
 
-        self.device.interface.blocking_sync_write(address, DATA_LEN as u8, &payload[..offset])
+        let data_len = u8::try_from(DATA_LEN).map_err(|_| ProtocolError::InvalidLength)?;
+        self.device
+            .interface
+            .blocking_sync_write(address, data_len, &payload[..offset])
     }
 
     /// Sync read state from multiple servos.
-    pub fn blocking_sync_read_state<const SIZE: usize>(&mut self, ids: &[u8; SIZE]) -> Result<[SmsServoState; SIZE], ProtocolError<I::Error>> {
+    pub fn blocking_sync_read_state<const SIZE: usize>(
+        &mut self,
+        ids: &[u8; SIZE],
+    ) -> Result<[SmsServoState; SIZE], ProtocolError<I::Error>> {
         let address = registers::addr::CURRENT_POSITION;
         let data_len = 8u8;
         let mut output = [0u8; 256];
-        let total_len = ids.len() * data_len as usize;
+        let total_len = ids
+            .len()
+            .checked_mul(usize::from(data_len))
+            .ok_or(ProtocolError::InvalidLength)?;
+        if total_len > output.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
 
-        self.device.interface.blocking_sync_read(address, data_len, ids, &mut output[..total_len])?;
+        self.device.interface.blocking_sync_read(
+            address,
+            data_len,
+            ids,
+            &mut output[..total_len],
+        )?;
 
         let mut states = [SmsServoState::default(); SIZE];
         for (i, &id) in ids.iter().enumerate() {
@@ -658,7 +908,10 @@ where
 
     /// Read full telemetry.
     #[allow(clippy::cast_possible_truncation)]
-    pub fn blocking_read_state(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
+    pub fn blocking_read_state(
+        &mut self,
+        id: u8,
+    ) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read()?.position();
         let speed_raw = device.current_speed().read()?.speed();
@@ -684,18 +937,37 @@ impl<I> SmsStsBus<I>
 where
     I: AsyncRead + AsyncWrite,
 {
-    /// Read version information.
-    pub async fn read_version(&mut self, id: u8) -> Result<VersionInformation, ProtocolError<I::Error>> {
+    /// Read firmware and servo version bytes.
+    pub async fn read_version(
+        &mut self,
+        id: u8,
+    ) -> Result<VersionInformation, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(VersionInformation {
-            firmware_major: device.fw_major_version().read_async().await?.version_number(),
-            firmware_minor: device.fw_minor_version().read_async().await?.version_number(),
-            servo_major: device.servo_major_version().read_async().await?.version_number(),
-            servo_minor: device.servo_minor_version().read_async().await?.version_number(),
+            firmware_major: device
+                .fw_major_version()
+                .read_async()
+                .await?
+                .version_number(),
+            firmware_minor: device
+                .fw_minor_version()
+                .read_async()
+                .await?
+                .version_number(),
+            servo_major: device
+                .servo_major_version()
+                .read_async()
+                .await?
+                .version_number(),
+            servo_minor: device
+                .servo_minor_version()
+                .read_async()
+                .await?
+                .version_number(),
         })
     }
 
-    /// Ping a servo.
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub async fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -710,16 +982,24 @@ where
 
     /// Set target position.
     ///
-    /// **Units:** `position` = steps (12-bit encoder: 0-4095 by default, or offset-adjusted signed)
-    pub async fn write_position(&mut self, id: u8, position: i16) -> Result<(), ProtocolError<I::Error>> {
+    /// **Units:** `position` = signed protocol steps (`-32767..=32767`)
+    pub async fn write_position(
+        &mut self,
+        id: u8,
+        position: i16,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let position = encode_signed_position(position).ok_or(ProtocolError::InvalidSetting)?;
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.target_position().write_async(|w| w.set_position(encode_signed_position(position))).await?;
+        device
+            .target_position()
+            .write_async(|w| w.set_position(position))
+            .await?;
         Ok(())
     }
 
     /// Get current position.
     ///
-    /// **Units:** Returns `steps` (12-bit encoder: 0-4095)
+    /// **Units:** Returns signed protocol steps.
     pub async fn read_position(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read_async().await?.position();
@@ -732,16 +1012,48 @@ where
         Ok(device.move_flag().read_async().await?.flag())
     }
 
-    /// Set servo operating mode.
-    pub async fn set_operating_mode(&mut self, id: u8, mode: ServoMode) -> Result<(), ProtocolError<I::Error>> {
+    /// Read all supported SMS/ST operating modes.
+    pub async fn read_operating_mode(
+        &mut self,
+        id: u8,
+    ) -> Result<SmsStsOperatingMode, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
+        from_register_operating_mode(device.mode().read_async().await?.mode())
+            .ok_or(ProtocolError::InvalidSetting)
+    }
+
+    /// Set an SMS/ST operating mode, including PWM-open-loop and step modes.
+    pub async fn set_sms_sts_operating_mode(
+        &mut self,
+        id: u8,
+        mode: SmsStsOperatingMode,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        let mode = to_register_operating_mode(mode);
         device.unlock_eeprom().await?;
-        match mode {
-            ServoMode::Wheel => device.mode().write_async(|w| w.set_mode(OperatingMode::Wheel)).await?,
-            ServoMode::Position => device.mode().write_async(|w| w.set_mode(OperatingMode::Position)).await?,
+        let operation_result = device.mode().write_async(|w| w.set_mode(mode)).await;
+        let lock_result = device.lock_eeprom().await;
+        match (operation_result, lock_result) {
+            (Err(operation_error), _) => Err(operation_error),
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(lock_error)) => Err(lock_error),
         }
-        device.lock_eeprom().await?;
-        Ok(())
+    }
+
+    /// Set servo operating mode.
+    pub async fn set_operating_mode(
+        &mut self,
+        id: u8,
+        mode: ServoMode,
+    ) -> Result<(), ProtocolError<I::Error>> {
+        self.set_sms_sts_operating_mode(
+            id,
+            match mode {
+                ServoMode::Wheel => SmsStsOperatingMode::Wheel,
+                ServoMode::Position => SmsStsOperatingMode::Position,
+            },
+        )
+        .await
     }
 
     /// Read position offset.
@@ -753,7 +1065,7 @@ where
     pub async fn read_offset(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let offset_raw = device.offset().read_async().await?.offset();
-        Ok(offset_raw as i16)
+        decode_offset(offset_raw).ok_or(ProtocolError::InvalidSetting)
     }
 
     /// Set position offset.
@@ -764,10 +1076,15 @@ where
     /// **Units:** `offset` = `steps` (signed)
     pub async fn set_offset(&mut self, id: u8, offset: i16) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
+        let encoded = encode_offset(offset).ok_or(ProtocolError::InvalidSetting)?;
         device.unlock_eeprom().await?;
-        device.offset().write_async(|w| w.set_offset(offset as u16)).await?;
-        device.lock_eeprom().await?;
-        Ok(())
+        let operation_result = device.offset().write_async(|w| w.set_offset(encoded)).await;
+        let lock_result = device.lock_eeprom().await;
+        match (operation_result, lock_result) {
+            (Err(operation_error), _) => Err(operation_error),
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(lock_error)) => Err(lock_error),
+        }
     }
 
     /// Read full telemetry.
@@ -778,7 +1095,11 @@ where
         let speed_raw = device.current_speed().read_async().await?.speed();
         let load_raw = device.current_load().read_async().await?.load();
         let voltage_raw = device.current_voltage().read_async().await?.voltage();
-        let temp_raw = device.current_temperature().read_async().await?.temperature();
+        let temp_raw = device
+            .current_temperature()
+            .read_async()
+            .await?
+            .temperature();
         let moving = device.move_flag().read_async().await?.flag();
         let current = decode_current(device.current_current().read_async().await?.current());
 
@@ -807,26 +1128,114 @@ mod tests {
     #[test]
     fn test_signed_position_encoding() {
         // Test positive values (default range: 0-4095)
-        assert_eq!(encode_signed_position(0), 0x0000);
-        assert_eq!(encode_signed_position(100), 100);
-        assert_eq!(encode_signed_position(4095), 4095);
+        assert_eq!(encode_signed_position(0), Some(0x0000));
+        assert_eq!(encode_signed_position(100), Some(100));
+        assert_eq!(encode_signed_position(4095), Some(4095));
 
         // Test negative values (bit 15 should be set for sign)
         // These would be used with offset calibration
-        assert_eq!(encode_signed_position(-1), 0x8001);
-        assert_eq!(encode_signed_position(-100), 0x8064);
-        assert_eq!(encode_signed_position(-2048), 0x8800); // Max negative for centered offset
+        assert_eq!(encode_signed_position(-1), Some(0x8001));
+        assert_eq!(encode_signed_position(-100), Some(0x8064));
+        assert_eq!(encode_signed_position(-2048), Some(0x8800)); // Max negative for centered offset
+        assert_eq!(encode_signed_position(4095), Some(4095));
+        assert_eq!(encode_signed_position(-4095), Some(0x8FFF));
+        assert_eq!(encode_signed_position(i16::MAX), Some(32767));
+        assert_eq!(encode_signed_position(-32767), Some(0xFFFF));
+        assert_eq!(encode_signed_position(-32768), None);
 
         // Test round-trip encoding/decoding
-        // Note: Valid range depends on offset, but encoding works for full i16 range
+        // The protocol supports signed magnitudes through 32767.
         for val in [-4095, -2048, -1000, -1, 0, 1, 1000, 2047, 4095] {
-            let encoded = encode_signed_position(val);
+            let encoded = encode_signed_position(val).unwrap();
             let decoded = decode_signed_position(encoded);
             assert_eq!(decoded, val, "Round-trip failed for {val}");
         }
 
-        // Verify bit 15 is used as sign flag
-        assert_eq!(encode_signed_position(-1) & 0x8000, 0x8000); // Sign bit set
-        assert_eq!(encode_signed_position(1) & 0x8000, 0x0000); // Sign bit clear
+        // Bit 15 is the sign flag
+        assert_eq!(encode_signed_position(-1).unwrap() & 0x8000, 0x8000); // Sign bit set
+        assert_eq!(encode_signed_position(1).unwrap() & 0x8000, 0x0000); // Sign bit clear
+        assert_eq!(encode_signed_position(i16::MIN), None);
+        assert_eq!(encode_signed_speed(i16::MIN), None);
+    }
+
+    #[test]
+    fn test_position_commands_zero_goal_time() {
+        assert_eq!(
+            encode_position_payload(123, u16::MAX, 456),
+            Some([123, 0, 0, 0, 200, 1])
+        );
+
+        let moves = [SmsPositionMove {
+            id: 1,
+            position: -123,
+            time: u16::MAX,
+            speed: 456,
+        }];
+        let mut payload = [0u8; 256];
+        let (data_len, payload_len) =
+            fill_sync_position_payload::<()>(&moves, &mut payload).unwrap();
+        assert_eq!(data_len, 6);
+        assert_eq!(&payload[..payload_len], &[1, 123, 128, 0, 0, 200, 1]);
+
+        let moves = [SmsPositionMoveEx {
+            id: 2,
+            acceleration: 7,
+            position: 123,
+            time: u16::MAX,
+            speed: 456,
+        }];
+        let mut payload = [0u8; 256];
+        let (data_len, payload_len) =
+            fill_sync_position_ex_payload::<()>(&moves, &mut payload).unwrap();
+        assert_eq!(data_len, 7);
+        assert_eq!(&payload[..payload_len], &[2, 7, 123, 0, 0, 0, 200, 1]);
+    }
+
+    #[test]
+    fn test_offset_encoding_round_trips() {
+        for value in [-4095, -2048, -2047, -1, 0, 1, 2047, 2048, 4095] {
+            let raw = encode_offset(value).unwrap();
+            assert_eq!(
+                decode_offset(raw),
+                Some(value),
+                "Round-trip failed for {value}"
+            );
+        }
+        assert_eq!(encode_offset(-4096), None);
+        assert_eq!(encode_offset(4096), None);
+        assert_eq!(decode_offset(0x2000), None);
+    }
+
+    #[test]
+    fn test_operating_mode_mapping() {
+        assert_eq!(
+            from_register_operating_mode(OperatingMode::Position),
+            Some(SmsStsOperatingMode::Position)
+        );
+        assert_eq!(
+            from_register_operating_mode(OperatingMode::Wheel),
+            Some(SmsStsOperatingMode::Wheel)
+        );
+        assert_eq!(
+            from_register_operating_mode(OperatingMode::PwmOpenLoop),
+            Some(SmsStsOperatingMode::PwmOpenLoop)
+        );
+        assert_eq!(
+            from_register_operating_mode(OperatingMode::Step),
+            Some(SmsStsOperatingMode::Step)
+        );
+        assert_eq!(
+            from_register_operating_mode(OperatingMode::Unknown(4)),
+            None
+        );
+
+        assert_eq!(
+            to_register_operating_mode(SmsStsOperatingMode::PwmOpenLoop),
+            OperatingMode::PwmOpenLoop
+        );
+        assert_eq!(
+            to_register_operating_mode(SmsStsOperatingMode::Step),
+            OperatingMode::Step
+        );
     }
 }

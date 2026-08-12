@@ -17,7 +17,8 @@ pub enum ServoMode {
 /// Raw values are stored in native hardware units. Use getter methods for converted values:
 /// - [`load()`](Self::load) - Returns load as percentage (-100.0 to +100.0)
 /// - [`voltage()`](Self::voltage) - Returns voltage in volts
-/// - [`current()`](Self::current) - Returns current in amperes (if available)
+/// - [`current()`](Self::current) - Returns amperes assuming one milliampere per raw count
+/// - [`current_with_milliamps_per_count()`](Self::current_with_milliamps_per_count) - Applies a device-specific scale
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ServoTelemetry {
@@ -35,7 +36,7 @@ pub struct ServoTelemetry {
     pub voltage_raw: u8,
     /// Temperature in `°C` (direct value, no conversion needed).
     pub temperature_raw: u8,
-    /// Current draw in `mA` (only available on some servos).
+    /// Current draw in device-specific raw units (only available on some servos).
     pub current_raw: Option<i16>,
     /// Whether the servo is currently moving.
     pub moving: bool,
@@ -44,12 +45,14 @@ pub struct ServoTelemetry {
 impl ServoTelemetry {
     /// Get position in steps.
     #[inline]
+    #[must_use]
     pub fn position(&self) -> i16 {
         self.position_raw
     }
 
     /// Get speed in steps/second (signed, negative = CCW).
     #[inline]
+    #[must_use]
     pub fn speed(&self) -> i16 {
         self.speed_raw
     }
@@ -58,26 +61,41 @@ impl ServoTelemetry {
     ///
     /// Returns -100.0 to +100.0 (negative = CCW torque).
     #[inline]
+    #[must_use]
     pub fn load(&self) -> f32 {
-        self.load_raw as f32 * 0.1
+        f32::from(self.load_raw) * 0.1
     }
 
     /// Get voltage in volts.
     #[inline]
+    #[must_use]
     pub fn voltage(&self) -> f32 {
-        self.voltage_raw as f32 * 0.1
+        f32::from(self.voltage_raw) * 0.1
     }
 
     /// Get temperature in degrees Celsius.
     #[inline]
+    #[must_use]
     pub fn temperature(&self) -> u8 {
         self.temperature_raw
     }
 
-    /// Get current in amperes (if available).
+    /// Get current in amperes assuming `current_raw` is in milliamps.
+    ///
+    /// This assumption is not universal. SMS/ST uses 6.5 mA per count; use
+    /// [`current_with_milliamps_per_count`](Self::current_with_milliamps_per_count)
+    /// for device-specific scaling.
     #[inline]
+    #[must_use]
     pub fn current(&self) -> Option<f32> {
-        self.current_raw.map(|c| c as f32 * 0.001)
+        self.current_with_milliamps_per_count(1.0)
+    }
+
+    /// Get current in amperes using the supplied milliampere-per-count scale.
+    #[inline]
+    #[must_use]
+    pub fn current_with_milliamps_per_count(&self, milliamps_per_count: f32) -> Option<f32> {
+        self.current_raw
+            .map(|c| f32::from(c) * milliamps_per_count * 0.001)
     }
 }
-

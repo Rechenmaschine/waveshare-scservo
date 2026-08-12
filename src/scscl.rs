@@ -69,6 +69,25 @@ impl<I> core::ops::DerefMut for BusIdGuard<'_, I> {
     }
 }
 
+fn with_blocking_eeprom<I, T, F>(
+    device: &mut ScsclDevice<UartBusInterface<I>>,
+    operation: F,
+) -> Result<T, ProtocolError<I::Error>>
+where
+    I: BlockingRead + BlockingWrite,
+    F: FnOnce(&mut ScsclDevice<UartBusInterface<I>>) -> Result<T, ProtocolError<I::Error>>,
+{
+    device.blocking_unlock_eeprom()?;
+    let operation_result = operation(device);
+    let lock_result = device.blocking_lock_eeprom();
+
+    match (operation_result, lock_result) {
+        (Err(operation_error), _) => Err(operation_error),
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(lock_error)) => Err(lock_error),
+    }
+}
+
 fn encode_position_payload(position: u16, time: u16, speed: u16) -> [u8; 6] {
     let p = position.to_be_bytes();
     let t = time.to_be_bytes();
@@ -83,6 +102,9 @@ fn fill_sync_position_payload<E>(
     let data_len: u8 = 6;
     let mut offset = 0;
     for m in moves {
+        if m.position > scscl_constants::SCSCL_MAX_POSITION_STEPS {
+            return Err(ProtocolError::InvalidSetting);
+        }
         if offset + 7 > payload.len() {
             return Err(ProtocolError::InvalidLength);
         }
@@ -129,7 +151,9 @@ fn fill_sync_motor_payload<E>(
             return Err(ProtocolError::InvalidLength);
         }
         payload[offset] = cmd.id;
-        let encoded = encode_signed_pwm(cmd.output).to_be_bytes();
+        let encoded = encode_signed_pwm(cmd.output)
+            .ok_or(ProtocolError::InvalidSetting)?
+            .to_be_bytes();
         payload[offset + 1] = encoded[0];
         payload[offset + 2] = encoded[1];
         offset += 3;
@@ -166,13 +190,21 @@ impl<I> ScsclBus<I> {
     pub fn inner_mut(&mut self) -> &mut ScsclDevice<UartBusInterface<I>> {
         &mut self.device
     }
+
+    /// Configure whether unicast write-like commands are expected to reply.
+    ///
+    /// Response level 1 is the default. Set this to `false` when the servo's
+    /// response status level is 0; READ and PING still expect replies.
+    pub fn set_response_status_level(&mut self, enabled: bool) {
+        self.device.interface.set_response_status_level(enabled);
+    }
 }
 
 impl<I> ScsclBus<I>
 where
     I: BlockingRead + BlockingWrite,
 {
-    /// Read version information.
+    /// Read firmware and servo version bytes.
     pub fn blocking_read_version(
         &mut self,
         id: u8,
@@ -186,7 +218,7 @@ where
         })
     }
 
-    /// Ping a servo.
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub fn blocking_ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -205,9 +237,18 @@ where
         current_id: u8,
         new_id: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if current_id > crate::MAX_SERVO_ID || new_id > crate::MAX_SERVO_ID {
+            return Err(ProtocolError::InvalidId);
+        }
         let mut device = BusIdGuard::new(&mut self.device, current_id);
         device.blocking_unlock_eeprom()?;
-        device.id().write(|w| w.set_id(new_id))?;
+        if let Err(error) = device.id().write(|w| w.set_id(new_id)) {
+            let _ = device.blocking_lock_eeprom();
+            return Err(error);
+        }
+        // The servo starts answering at its new ID immediately after the ID
+        // register is written, so the lock command must use that ID too.
+        device.interface.set_busid(new_id);
         device.blocking_lock_eeprom()?;
         Ok(())
     }
@@ -232,15 +273,16 @@ where
         min: u16,
         max: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        if min > max {
+        if (min != 0 || max != 0) && (min >= max || max > scscl_constants::SCSCL_MAX_POSITION_STEPS)
+        {
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.minimum_angle().write(|w| w.set_angle(min))?;
-        device.maximum_angle().write(|w| w.set_angle(max))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device.minimum_angle().write(|w| w.set_angle(min))?;
+            device.maximum_angle().write(|w| w.set_angle(max))?;
+            Ok(())
+        })
     }
 
     /// Set voltage limits.
@@ -252,16 +294,19 @@ where
         min_voltage: u8,
         max_voltage: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if min_voltage > 254 || max_voltage > 254 || min_voltage > max_voltage {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device
-            .minimum_input_voltage()
-            .write(|w| w.set_voltage(min_voltage))?;
-        device
-            .maximum_input_voltage()
-            .write(|w| w.set_voltage(max_voltage))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .minimum_input_voltage()
+                .write(|w| w.set_voltage(min_voltage))?;
+            device
+                .maximum_input_voltage()
+                .write(|w| w.set_voltage(max_voltage))?;
+            Ok(())
+        })
     }
 
     /// Set maximum temperature limit.
@@ -272,13 +317,16 @@ where
         id: u8,
         max_temp: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if max_temp > 100 {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device
-            .maximum_temperature()
-            .write(|w| w.set_temperature(max_temp))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .maximum_temperature()
+                .write(|w| w.set_temperature(max_temp))?;
+            Ok(())
+        })
     }
 
     /// Set maximum torque.
@@ -293,17 +341,18 @@ where
             return Err(ProtocolError::InvalidSetting);
         }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device
-            .maximum_torque()
-            .write(|w| w.set_torque(max_torque))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device
+                .maximum_torque()
+                .write(|w| w.set_torque(max_torque))?;
+            Ok(())
+        })
     }
 
     /// Set PID coefficients.
     ///
-    /// **Units:** `kp`, `kd`, `ki` = unitless (0-254)
+    /// **Units:** `kp`, `kd` = unitless (0-254).
+    /// The generic SCSCL table reserves the I-coefficient address, so `ki` must be 0.
     pub fn blocking_set_pid_coefficients(
         &mut self,
         id: u8,
@@ -311,13 +360,15 @@ where
         kd: u8,
         ki: u8,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if kp > 254 || kd > 254 || ki != 0 {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
-        device.blocking_unlock_eeprom()?;
-        device.p_coefficient().write(|w| w.set_coefficient(kp))?;
-        device.d_coefficient().write(|w| w.set_coefficient(kd))?;
-        device.i_coefficient().write(|w| w.set_coefficient(ki))?;
-        device.blocking_lock_eeprom()?;
-        Ok(())
+        with_blocking_eeprom(&mut device, |device| {
+            device.p_coefficient().write(|w| w.set_coefficient(kp))?;
+            device.d_coefficient().write(|w| w.set_coefficient(kd))?;
+            Ok(())
+        })
     }
 
     /// Write target position.
@@ -333,6 +384,9 @@ where
         id: u8,
         steps: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if steps > scscl_constants::SCSCL_MAX_POSITION_STEPS {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.target_position().write(|w| w.set_position(steps))?;
         Ok(())
@@ -378,7 +432,10 @@ where
 
     /// Read current draw.
     ///
-    /// **Units:** Returns `mA` (likely)
+    /// Read current draw when supported by the SCSCL firmware variant.
+    ///
+    /// The returned value is a signed raw register value. The generic Waveshare
+    /// SC table does not define a unit for this optional register.
     pub fn blocking_read_current(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_current(device.current_current().read()?.current()))
@@ -393,6 +450,8 @@ where
             voltage_error: status.voltage(),
             temperature_error: status.temperature(),
             overload_error: status.overload(),
+            magnetic_error: false,
+            current_error: false,
         })
     }
 
@@ -422,7 +481,7 @@ where
     /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
     /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
     ///
-    /// **Note:** If you need custom angle limits in position mode, call
+    /// Custom position-mode angle limits can be applied with
     /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
     pub fn blocking_set_operating_mode(
         &mut self,
@@ -445,7 +504,7 @@ where
         id: u8,
         output: i16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        let encoded = encode_signed_pwm(output);
+        let encoded = encode_signed_pwm(output).ok_or(ProtocolError::InvalidSetting)?;
         let mut device = BusIdGuard::new(&mut self.device, id);
         device.goal_time().write(|w| w.set_time(encoded))?;
         Ok(())
@@ -473,6 +532,9 @@ where
         time: u16,
         speed: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if position > scscl_constants::SCSCL_MAX_POSITION_STEPS {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let data = encode_position_payload(position, time, speed);
         self.device
             .interface
@@ -521,11 +583,9 @@ where
     ) -> Result<(), ProtocolError<I::Error>> {
         let mut payload = [0u8; 256];
         let (data_len, offset) = fill_sync_motor_payload(commands, &mut payload)?;
-        self.device.interface.blocking_sync_write(
-            addr::GOAL_TIME,
-            data_len,
-            &payload[..offset],
-        )
+        self.device
+            .interface
+            .blocking_sync_write(addr::GOAL_TIME, data_len, &payload[..offset])
     }
 
     /// Generic sync write to any register address.
@@ -561,9 +621,10 @@ where
             offset += 1 + DATA_LEN;
         }
 
+        let data_len = u8::try_from(DATA_LEN).map_err(|_| ProtocolError::InvalidLength)?;
         self.device
             .interface
-            .blocking_sync_write(address, DATA_LEN as u8, &payload[..offset])
+            .blocking_sync_write(address, data_len, &payload[..offset])
     }
 
     /// Sync read state from multiple servos.
@@ -574,7 +635,13 @@ where
         let address = registers::addr::CURRENT_POSITION;
         let data_len = 8u8;
         let mut output = [0u8; 256];
-        let total_len = ids.len() * data_len as usize;
+        let total_len = ids
+            .len()
+            .checked_mul(usize::from(data_len))
+            .ok_or(ProtocolError::InvalidLength)?;
+        if total_len > output.len() {
+            return Err(ProtocolError::InvalidLength);
+        }
 
         self.device.interface.blocking_sync_read(
             address,
@@ -606,15 +673,13 @@ where
         let voltage_raw = device.current_voltage().read()?.voltage();
         let temp_raw = device.current_temperature().read()?.temperature();
         let moving = device.move_flag().read()?.flag();
-        let current = decode_current(device.current_current().read()?.current());
-
         Ok(ServoTelemetry {
             position_raw: position_raw as i16,
             speed_raw: decode_speed(speed_raw),
             load_raw: decode_load(load_raw),
             voltage_raw,
             temperature_raw: temp_raw,
-            current_raw: Some(current),
+            current_raw: None,
             moving,
         })
     }
@@ -624,7 +689,7 @@ impl<I> ScsclBus<I>
 where
     I: AsyncRead + AsyncWrite,
 {
-    /// Read version information.
+    /// Read firmware and servo version bytes.
     pub async fn read_version(
         &mut self,
         id: u8,
@@ -654,7 +719,7 @@ where
         })
     }
 
-    /// Ping a servo.
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub async fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -673,6 +738,9 @@ where
         id: u8,
         steps: u16,
     ) -> Result<(), ProtocolError<I::Error>> {
+        if steps > scscl_constants::SCSCL_MAX_POSITION_STEPS {
+            return Err(ProtocolError::InvalidSetting);
+        }
         let mut device = BusIdGuard::new(&mut self.device, id);
         device
             .target_position()
@@ -699,42 +767,45 @@ where
     /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
     /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
     ///
-    /// **Note:** If you need custom angle limits in position mode, use
-    /// [`set_angle_limits`](Self::set_angle_limits) after switching modes.
+    /// Custom position-mode angle limits can be applied with
+    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
     pub async fn set_operating_mode(
         &mut self,
         id: u8,
         mode: ServoMode,
     ) -> Result<(), ProtocolError<I::Error>> {
-        match mode {
+        let mut device = BusIdGuard::new(&mut self.device, id);
+        device.unlock_eeprom().await?;
+        let operation_result = match mode {
             ServoMode::Wheel => {
-                let mut device = BusIdGuard::new(&mut self.device, id);
-                device.unlock_eeprom().await?;
-                device
-                    .minimum_angle()
-                    .write_async(|w| w.set_angle(0))
-                    .await?;
-                device
-                    .maximum_angle()
-                    .write_async(|w| w.set_angle(0))
-                    .await?;
-                device.lock_eeprom().await?;
-                Ok(())
+                async {
+                    device
+                        .minimum_angle()
+                        .write_async(|w| w.set_angle(0))
+                        .await?;
+                    device.maximum_angle().write_async(|w| w.set_angle(0)).await
+                }
+                .await
             }
             ServoMode::Position => {
-                let mut device = BusIdGuard::new(&mut self.device, id);
-                device.unlock_eeprom().await?;
-                device
-                    .minimum_angle()
-                    .write_async(|w| w.set_angle(0))
-                    .await?;
-                device
-                    .maximum_angle()
-                    .write_async(|w| w.set_angle(scscl_constants::SCSCL_MAX_POSITION_STEPS))
-                    .await?;
-                device.lock_eeprom().await?;
-                Ok(())
+                async {
+                    device
+                        .minimum_angle()
+                        .write_async(|w| w.set_angle(0))
+                        .await?;
+                    device
+                        .maximum_angle()
+                        .write_async(|w| w.set_angle(scscl_constants::SCSCL_MAX_POSITION_STEPS))
+                        .await
+                }
+                .await
             }
+        };
+        let lock_result = device.lock_eeprom().await;
+        match (operation_result, lock_result) {
+            (Err(operation_error), _) => Err(operation_error),
+            (Ok(()), Ok(())) => Ok(()),
+            (Ok(()), Err(lock_error)) => Err(lock_error),
         }
     }
 
@@ -746,7 +817,7 @@ where
         id: u8,
         output: i16,
     ) -> Result<(), ProtocolError<I::Error>> {
-        let encoded = encode_signed_pwm(output);
+        let encoded = encode_signed_pwm(output).ok_or(ProtocolError::InvalidSetting)?;
         let mut device = BusIdGuard::new(&mut self.device, id);
         device
             .goal_time()
@@ -769,15 +840,13 @@ where
             .await?
             .temperature();
         let moving = device.move_flag().read_async().await?.flag();
-        let current = device.current_current().read_async().await?.current();
-
         Ok(ServoTelemetry {
             position_raw: position_raw as i16,
             speed_raw: decode_speed(speed_raw),
             load_raw: decode_load(load_raw),
             voltage_raw,
             temperature_raw: temp_raw,
-            current_raw: Some(decode_current(current)),
+            current_raw: None,
             moving,
         })
     }
