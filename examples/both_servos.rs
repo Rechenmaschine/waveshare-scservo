@@ -78,8 +78,7 @@ fn main() {
             speed: 0,
         },
     ];
-    bus.blocking_sync_write_position(&moves)
-        .expect("sync move");
+    bus.blocking_sync_write_position(&moves).expect("sync move");
 
     let states = bus.blocking_sync_read_state(&ids).expect("sync read");
     println!("pos: {} {}", states[0].position(), states[1].position());
@@ -104,8 +103,7 @@ fn main() {
             output: -300,
         },
     ];
-    bus.blocking_sync_write_motor(&motors)
-        .expect("sync motor");
+    bus.blocking_sync_write_motor(&motors).expect("sync motor");
 
     for &id in &ids {
         bus.blocking_set_torque_mode(id, TorqueMode::Disable)
