@@ -268,14 +268,7 @@ fn parse_state_chunk(id: u8, chunk: &[u8]) -> SmsServoState {
     }
 }
 
-/// Encode signed position to hardware format (bit 15 = sign) for SMS_STS.
-///
-/// The hardware protocol uses bit 15 of a 16-bit value as a sign flag. The
-/// target-position register accepts magnitudes up to 32767.
-///
-/// **Hardware encoding:**
-/// - Positive: `0x0000` to `0x7FFF` (0 to 32767)
-/// - Negative: `0x8001` to `0xFFFF` (-1 to -32767, bit 15 set)
+/// Encode signed SMS_STS position using bit 15 as the sign bit.
 fn encode_signed_position(position: i16) -> Option<u16> {
     let magnitude = position.unsigned_abs();
     if magnitude > BIT_15_VALUE {
@@ -320,9 +313,7 @@ fn decode_offset(raw: u16) -> Option<i16> {
     })
 }
 
-/// Decode signed position from hardware format (bit 15 = sign) for SMS_STS.
-///
-/// Converts the hardware's bit-15-sign encoding back to a standard signed i16.
+/// Decode an SMS_STS position whose bit 15 is the sign bit.
 #[allow(clippy::cast_possible_wrap)]
 fn decode_signed_position(pos_raw: u16) -> i16 {
     if pos_raw & BIT_15_SIGN != 0 {
@@ -380,7 +371,7 @@ where
         self.device.interface.blocking_ping(id)
     }
 
-    /// Reset a servo to factory defaults.
+    /// Reset a servo.
     pub fn blocking_reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_reset(id)
     }
@@ -910,8 +901,11 @@ where
         self.device.interface.reset(id).await
     }
 
-    /// Write target position in signed protocol steps (-32767..=32767).
+    /// Write target position.
+    ///
     /// Requires torque enabled first.
+    ///
+    /// **Units:** `position` = signed protocol steps (`-32767..=32767`)
     pub async fn write_position(
         &mut self,
         id: u8,

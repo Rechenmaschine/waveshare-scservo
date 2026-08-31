@@ -20,8 +20,7 @@ device_driver::create_device!(
             type DefmtFeature = "defmt";
         }
 
-        /// Firmware major version number.
-        /// - Storage: EPROM (read-only)
+        /// Firmware major version (EPROM, read-only).
         register FW_MAJOR_VERSION {
             const ADDRESS = 0x00;
             const SIZE_BITS = 8;
@@ -31,8 +30,7 @@ device_driver::create_device!(
             version_number: uint = 0..8,
         },
 
-        /// Firmware minor version number.
-        /// - Storage: EPROM (read-only)
+        /// Firmware minor version (EPROM, read-only).
         register FW_MINOR_VERSION {
             const ADDRESS = 0x01;
             const SIZE_BITS = 8;
@@ -42,8 +40,7 @@ device_driver::create_device!(
             version_number: uint = 0..8,
         },
 
-        /// Endianness indicator (`0` for little-endian multi-byte values).
-        /// - Storage: EPROM (read-only)
+        /// Endianness indicator (`0` = little-endian; EPROM, read-only).
         register ENDIANNESS {
             const ADDRESS = 0x02;
             const SIZE_BITS = 8;
@@ -53,8 +50,7 @@ device_driver::create_device!(
             endian: uint = 0..8,
         },
 
-        /// Servo major/model version number.
-        /// - Storage: EPROM (read-only)
+        /// Servo major/model version (EPROM, read-only).
         register SERVO_MAJOR_VERSION {
             const ADDRESS = 0x03;
             const SIZE_BITS = 8;
@@ -64,8 +60,7 @@ device_driver::create_device!(
             version_number: uint = 0..8,
         },
 
-        /// Servo minor/version value.
-        /// - Storage: EPROM (read-only)
+        /// Servo minor/version value (EPROM, read-only).
         register SERVO_MINOR_VERSION {
             const ADDRESS = 0x04;
             const SIZE_BITS = 8;
@@ -75,11 +70,7 @@ device_driver::create_device!(
             version_number: uint = 0..8,
         },
 
-        /// Servo ID (unique on bus)
-        /// - Min: 0, Max: 253
-        /// - Initial: 1
-        /// - Storage: EPROM
-        /// ID 254 (0xFE) is broadcast
+        /// Servo ID (EPROM, `0..=253`, default `1`; `0xFE` is broadcast).
         register ID {
             const ADDRESS = 0x05;
             const SIZE_BITS = 8;
@@ -89,10 +80,7 @@ device_driver::create_device!(
             id: uint = 0..8,
         },
 
-        /// Baudrate setting
-        /// - Min: 0, Max: 11
-        /// - Initial: 0
-        /// - Storage: EPROM
+        /// Baud-rate setting (EPROM, values `0..=11`, default `0`).
         register BAUDRATE {
             const ADDRESS = 0x06;
             const SIZE_BITS = 8;
@@ -102,10 +90,7 @@ device_driver::create_device!(
             baudrate: uint as try SharedBaudRate = 0..8,
         },
 
-        /// Response status level
-        /// - 0: Only read/PING return responses
-        /// - 1: All commands return responses
-        /// - Storage: EPROM
+        /// Response status level (EPROM; `0` = READ/PING only, `1` = all commands).
         register RESPONSE_STATUS_LEVEL {
             const ADDRESS = 0x08;
             const SIZE_BITS = 8;
@@ -115,10 +100,7 @@ device_driver::create_device!(
             level: bool = 0,
         },
 
-        /// Minimum angle limit (steps)
-        /// - Min: 0, Max: 4094
-        /// - Initial: 0
-        /// - Storage: EPROM
+        /// Minimum angle limit in steps (EPROM, `0..=4094`, default `0`).
         register MINIMUM_ANGLE {
             const ADDRESS = 0x09;
             const SIZE_BITS = 16;
@@ -128,10 +110,7 @@ device_driver::create_device!(
             angle: uint = 0..16,
         },
 
-        /// Maximum angle limit (steps)
-        /// - Min: 1, Max: 4095
-        /// - Initial: 4095
-        /// - Storage: EPROM
+        /// Maximum angle limit in steps (EPROM, `1..=4095`, default `4095`).
         register MAXIMUM_ANGLE {
             const ADDRESS = 0x0B;
             const SIZE_BITS = 16;
@@ -141,10 +120,7 @@ device_driver::create_device!(
             angle: uint = 0..16,
         },
 
-        /// Maximum temperature limit (°C)
-        /// - Min: 0, Max: 100
-        /// - Initial: 70
-        /// - Storage: EPROM
+        /// Maximum temperature limit in °C (EPROM, `0..=100`, default `70`).
         register MAXIMUM_TEMPERATURE {
             const ADDRESS = 0x0D;
             const SIZE_BITS = 8;
@@ -154,10 +130,8 @@ device_driver::create_device!(
             temperature: uint = 0..8,
         },
 
-        /// Maximum input voltage (0.1V units)
-        /// - Min: 0, Max: 254
-        /// - Initial: model-dependent; 0 disables voltage feedback with the minimum limit also 0
-        /// - Storage: EPROM
+        /// Maximum input voltage in `0.1V` units (EPROM, `0..=254`; `0` may disable
+        /// voltage feedback when the minimum is also `0`).
         register MAXIMUM_INPUT_VOLTAGE {
             const ADDRESS = 0x0E;
             const SIZE_BITS = 8;
@@ -167,10 +141,7 @@ device_driver::create_device!(
             voltage: uint = 0..8,
         },
 
-        /// Minimum input voltage (0.1V units)
-        /// - Min: 0, Max: 254
-        /// - Initial: 40 (4.0V) in the generic ST table
-        /// - Storage: EPROM
+        /// Minimum input voltage in `0.1V` units (EPROM, `0..=254`, default `40`/4.0V).
         register MINIMUM_INPUT_VOLTAGE {
             const ADDRESS = 0x0F;
             const SIZE_BITS = 8;
@@ -180,10 +151,7 @@ device_driver::create_device!(
             voltage: uint = 0..8,
         },
 
-        /// Maximum torque (0.1% units)
-        /// - Min: 0, Max: 1000
-        /// - Initial: 1000 (100%)
-        /// - Storage: EPROM
+        /// Maximum torque in `0.1%` units (EPROM, `0..=1000`, default `1000`/100%).
         register MAXIMUM_TORQUE {
             const ADDRESS = 0x10;
             const SIZE_BITS = 16;
@@ -193,8 +161,7 @@ device_driver::create_device!(
             torque: uint = 0..16,
         },
 
-        /// Phase (special function byte)
-        /// - Storage: EPROM
+        /// Phase (special-function byte, EPROM).
         register PHASE {
             const ADDRESS = 0x12;
             const SIZE_BITS = 8;
@@ -204,8 +171,7 @@ device_driver::create_device!(
             phase: uint = 0..8,
         },
 
-        /// Unloading/protection conditions
-        /// - Storage: EPROM
+        /// Unloading/protection conditions (EPROM).
         register UNLOADING_CONDITIONS {
             const ADDRESS = 0x13;
             const SIZE_BITS = 8;
@@ -219,8 +185,7 @@ device_driver::create_device!(
             overload: bool = 5,
         },
 
-        /// LED alarm conditions
-        /// - Storage: EPROM
+        /// LED alarm conditions (EPROM).
         register LED_ALARM_CONDITION {
             const ADDRESS = 0x14;
             const SIZE_BITS = 8;
@@ -234,10 +199,7 @@ device_driver::create_device!(
             overload: bool = 5,
         },
 
-        /// P (proportional) coefficient
-        /// - Min: 0, Max: 254
-        /// - Initial: model-dependent
-        /// - Storage: EPROM
+        /// P (proportional) coefficient (EPROM, `0..=254`).
         register P_COEFFICIENT {
             const ADDRESS = 0x15;
             const SIZE_BITS = 8;
@@ -247,10 +209,7 @@ device_driver::create_device!(
             coefficient: uint = 0..8,
         },
 
-        /// D (derivative) coefficient
-        /// - Min: 0, Max: 254
-        /// - Initial: model-dependent
-        /// - Storage: EPROM
+        /// D (derivative) coefficient (EPROM, `0..=254`).
         register D_COEFFICIENT {
             const ADDRESS = 0x16;
             const SIZE_BITS = 8;
@@ -260,10 +219,7 @@ device_driver::create_device!(
             coefficient: uint = 0..8,
         },
 
-        /// I (integral) coefficient
-        /// - Min: 0, Max: 254
-        /// - Initial: 0
-        /// - Storage: EPROM
+        /// I (integral) coefficient (EPROM, `0..=254`, default `0`).
         register I_COEFFICIENT {
             const ADDRESS = 0x17;
             const SIZE_BITS = 8;
@@ -273,10 +229,7 @@ device_driver::create_device!(
             coefficient: uint = 0..8,
         },
 
-        /// Minimum starting force (0.1% units)
-        /// - Min: 0, Max: 254
-        /// - Initial: model-dependent
-        /// - Storage: EPROM
+        /// Minimum starting force in `0.1%` units (EPROM, `0..=254`).
         register MINIMUM_STARTING_FORCE {
             const ADDRESS = 0x18;
             const SIZE_BITS = 8;
@@ -286,9 +239,7 @@ device_driver::create_device!(
             force: uint = 0..8,
         },
 
-        /// Position-loop integral limit.
-        /// - Min: 0, Max: 254
-        /// - Storage: EPROM
+        /// Position-loop integral limit (EPROM, `0..=254`).
         register INTEGRAL_LIMIT {
             const ADDRESS = 0x19;
             const SIZE_BITS = 8;
@@ -298,10 +249,7 @@ device_driver::create_device!(
             limit: uint = 0..8,
         },
 
-        /// Clockwise insensitive zone (steps)
-        /// - Min: 0, Max: 16
-        /// - Initial: 1
-        /// - Storage: EPROM
+        /// Clockwise insensitive zone in steps (EPROM, `0..=16`, default `1`).
         register CLOCKWISE_INSENSITIVE_ZONE {
             const ADDRESS = 0x1A;
             const SIZE_BITS = 8;
@@ -311,10 +259,7 @@ device_driver::create_device!(
             zone: uint = 0..8,
         },
 
-        /// Anticlockwise insensitive zone (steps)
-        /// - Min: 0, Max: 16
-        /// - Initial: 1
-        /// - Storage: EPROM
+        /// Anticlockwise insensitive zone in steps (EPROM, `0..=16`, default `1`).
         register ANTICLOCKWISE_INSENSITIVE_ZONE {
             const ADDRESS = 0x1B;
             const SIZE_BITS = 8;
@@ -324,9 +269,7 @@ device_driver::create_device!(
             zone: uint = 0..8,
         },
 
-        /// Protection current (6.5mA units).
-        /// - Min: 0, Max: 2047
-        /// - Storage: EPROM
+        /// Protection current in 6.5 mA units (EPROM, `0..=2047`).
         register PROTECTION_CURRENT {
             const ADDRESS = 0x1C;
             const SIZE_BITS = 16;
@@ -336,9 +279,7 @@ device_driver::create_device!(
             current: uint = 0..16,
         },
 
-        /// Angular resolution multiplier.
-        /// - Min: 1, Max: 128
-        /// - Storage: EPROM
+        /// Angular resolution multiplier (EPROM, `1..=128`).
         register ANGLE_RESOLUTION {
             const ADDRESS = 0x1E;
             const SIZE_BITS = 8;
@@ -348,9 +289,7 @@ device_driver::create_device!(
             resolution: uint = 0..8,
         },
 
-        /// Middle offset (2 bytes, signed)
-        /// - SMS_STS specific
-        /// - Storage: EPROM
+        /// Signed middle offset (SMS_STS-specific, EPROM).
         register OFFSET {
             const ADDRESS = 0x1F;
             const SIZE_BITS = 16;
@@ -360,13 +299,8 @@ device_driver::create_device!(
             offset: uint = 0..16,
         },
 
-        /// Operating mode
-        /// - 0: Position servo mode
-        /// - 1: Wheel/motor mode (continuous rotation)
-        /// - 2: PWM open-loop mode
-        /// - 3: Step mode
-        /// - SMS_STS specific
-        /// - Storage: EPROM
+        /// Operating mode (SMS_STS-specific, EPROM; `0` position, `1` wheel,
+        /// `2` PWM open-loop, `3` step).
         register MODE {
             const ADDRESS = 0x21;
             const SIZE_BITS = 8;
@@ -382,10 +316,7 @@ device_driver::create_device!(
             } = 0..8,
         },
 
-        /// Holding torque after overload protection (1% units).
-        /// - Min: 0, Max: 254
-        /// - Initial: 20
-        /// - Storage: EPROM
+        /// Holding torque after overload protection in `1%` units (EPROM, `0..=254`, default `20`).
         register HOLDING_TORQUE {
             const ADDRESS = 0x22;
             const SIZE_BITS = 8;
@@ -395,10 +326,7 @@ device_driver::create_device!(
             torque: uint = 0..8,
         },
 
-        /// Overload protection time (10ms units).
-        /// - Min: 0, Max: 254
-        /// - Initial: 200 (2 seconds)
-        /// - Storage: EPROM
+        /// Overload protection time in 10 ms units (EPROM, `0..=254`, default `200`/2 s).
         register PROTECTION_TIME {
             const ADDRESS = 0x23;
             const SIZE_BITS = 8;
@@ -408,10 +336,7 @@ device_driver::create_device!(
             time: uint = 0..8,
         },
 
-        /// Overload torque threshold (1% units).
-        /// - Min: 0, Max: 254
-        /// - Initial: 80
-        /// - Storage: EPROM
+        /// Overload torque threshold in `1%` units (EPROM, `0..=254`, default `80`).
         register OVERLOAD_TORQUE {
             const ADDRESS = 0x24;
             const SIZE_BITS = 8;
@@ -421,9 +346,7 @@ device_driver::create_device!(
             torque: uint = 0..8,
         },
 
-        /// Velocity-loop proportional coefficient.
-        /// - Min: 0, Max: 254
-        /// - Storage: EPROM
+        /// Velocity-loop proportional coefficient (EPROM, `0..=254`).
         register VELOCITY_LOOP_P_COEFFICIENT {
             const ADDRESS = 0x25;
             const SIZE_BITS = 8;
@@ -433,10 +356,7 @@ device_driver::create_device!(
             coefficient: uint = 0..8,
         },
 
-        /// Over-current protection time (10ms units).
-        /// - Min: 0, Max: 254
-        /// - Initial: 200 (2 seconds)
-        /// - Storage: EPROM
+        /// Over-current protection time in 10 ms units (EPROM, `0..=254`, default `200`/2 s).
         register OVERCURRENT_PROTECTION_TIME {
             const ADDRESS = 0x26;
             const SIZE_BITS = 8;
@@ -446,9 +366,7 @@ device_driver::create_device!(
             time: uint = 0..8,
         },
 
-        /// Velocity-loop integral coefficient.
-        /// - Min: 0, Max: 254
-        /// - Storage: EPROM
+        /// Velocity-loop integral coefficient (EPROM, `0..=254`).
         register VELOCITY_LOOP_I_COEFFICIENT {
             const ADDRESS = 0x27;
             const SIZE_BITS = 8;
@@ -458,12 +376,8 @@ device_driver::create_device!(
             coefficient: uint = 0..8,
         },
 
-        /// Torque switch
-        /// - 0: Disable/free output
-        /// - 1: Enable
-        /// - 2: Damping state
-        /// - 128: Calibration mode (SMS_STS)
-        /// - Storage: SRAM
+        /// Torque switch (SRAM; `0` = free, `1` = enabled, `2` = damping,
+        /// `128` = calibration).
         register TORQUE_SWITCH {
             const ADDRESS = 0x28;
             const SIZE_BITS = 8;
@@ -479,9 +393,7 @@ device_driver::create_device!(
             } = 0..8,
         },
 
-        /// Acceleration parameter
-        /// - SMS_STS specific
-        /// - Storage: SRAM
+        /// Acceleration parameter (SMS_STS-specific, SRAM).
         register ACCELERATION {
             const ADDRESS = 0x29;
             const SIZE_BITS = 8;
@@ -491,9 +403,7 @@ device_driver::create_device!(
             acceleration: uint = 0..8,
         },
 
-        /// Target position (steps)
-        /// - Min: -32767, Max: 32767 (signed with bit 15)
-        /// - Storage: SRAM
+        /// Target position in signed steps (bit 15 is sign; SRAM, `-32767..=32767`).
         register TARGET_POSITION {
             const ADDRESS = 0x2A;
             const SIZE_BITS = 16;
@@ -503,15 +413,8 @@ device_driver::create_device!(
             position: uint = 0..16,
         },
 
-        /// PWM open-loop speed / raw goal-time register.
-        /// - Storage: SRAM
-        ///
-        /// **PWM open-loop mode:** PWM magnitude, with bit 10 as direction.
-        ///
-        /// **Position and wheel modes:** The reference SMS_STS commands write
-        /// zero to this field; the effective speed is in `GOAL_SPEED`.
-        ///
-        /// Reference: SMS_STS.h defines this as SMS_STS_GOAL_TIME_L (address 44 = 0x2C)
+        /// PWM magnitude in open-loop mode (bit 10 is sign); position and wheel
+        /// commands write zero here and use `GOAL_SPEED` (SRAM).
         register GOAL_TIME {
             const ADDRESS = 0x2C;
             const SIZE_BITS = 16;
@@ -521,19 +424,8 @@ device_driver::create_device!(
             time: uint = 0..16,
         },
 
-        /// Goal speed (steps/s)
-        /// - Storage: SRAM
-        ///
-        /// **Position mode:** Maximum speed for position moves.
-        ///
-        /// **Wheel mode:** Signed rotation speed (bit 15 = direction)
-        /// - Positive = CW, Negative = CCW
-        /// - Encoding: if negative, set bit 15 and use absolute value
-        ///
-        /// Unlike SCSCL (which uses GOAL_TIME for PWM output), SMS_STS has a dedicated
-        /// speed register that serves both modes.
-        ///
-        /// Reference: SMS_STS.h defines this as SMS_STS_GOAL_SPEED_L (address 46 = 0x2E)
+        /// Goal speed in steps/s (SRAM); position mode uses a maximum speed and
+        /// wheel mode uses signed speed with bit 15 as the sign bit.
         register GOAL_SPEED {
             const ADDRESS = 0x2E;
             const SIZE_BITS = 16;
@@ -543,9 +435,7 @@ device_driver::create_device!(
             speed: uint = 0..16,
         },
 
-        /// Runtime torque limit (0.1% units)
-        /// - SMS_STS specific
-        /// - Storage: SRAM
+        /// Runtime torque limit in `0.1%` units (SMS_STS-specific, SRAM).
         register TORQUE_LIMIT {
             const ADDRESS = 0x30;
             const SIZE_BITS = 16;
@@ -555,11 +445,7 @@ device_driver::create_device!(
             torque: uint = 0..16,
         },
 
-        /// Lock flag (EEPROM write protection)
-        /// - 0: Unlocked (EPROM writes saved)
-        /// - 1: Locked (EPROM writes not saved)
-        /// - Storage: SRAM
-        /// - Address: 0x37 for SMS_STS (different from SCSCL 0x30!)
+        /// EEPROM lock flag (SRAM; `0` = unlocked, `1` = locked).
         register LOCK_FLAG {
             const ADDRESS = 0x37;
             const SIZE_BITS = 8;
@@ -569,8 +455,7 @@ device_driver::create_device!(
             locked: bool = 0,
         },
 
-        /// Current position (steps, signed with bit 15)
-        /// - Storage: SRAM (read-only)
+        /// Current position in signed steps (bit 15 is sign; SRAM, read-only).
         register CURRENT_POSITION {
             const ADDRESS = 0x38;
             const SIZE_BITS = 16;
@@ -580,8 +465,7 @@ device_driver::create_device!(
             position: uint = 0..16,
         },
 
-        /// Current speed (steps/s, signed with bit 15)
-        /// - Storage: SRAM (read-only)
+        /// Current speed in signed steps/s (bit 15 is sign; SRAM, read-only).
         register CURRENT_SPEED {
             const ADDRESS = 0x3A;
             const SIZE_BITS = 16;
@@ -591,8 +475,7 @@ device_driver::create_device!(
             speed: uint = 0..16,
         },
 
-        /// Current load (0.1% units, signed with bit 10)
-        /// - Storage: SRAM (read-only)
+        /// Current load in signed `0.1%` units (bit 10 is sign; SRAM, read-only).
         register CURRENT_LOAD {
             const ADDRESS = 0x3C;
             const SIZE_BITS = 16;
@@ -602,8 +485,7 @@ device_driver::create_device!(
             load: uint = 0..16,
         },
 
-        /// Current voltage (0.1V units)
-        /// - Storage: SRAM (read-only)
+        /// Current voltage in `0.1V` units (SRAM, read-only).
         register CURRENT_VOLTAGE {
             const ADDRESS = 0x3E;
             const SIZE_BITS = 8;
@@ -613,8 +495,7 @@ device_driver::create_device!(
             voltage: uint = 0..8,
         },
 
-        /// Current temperature (°C)
-        /// - Storage: SRAM (read-only)
+        /// Current temperature in °C (SRAM, read-only).
         register CURRENT_TEMPERATURE {
             const ADDRESS = 0x3F;
             const SIZE_BITS = 8;
@@ -624,8 +505,7 @@ device_driver::create_device!(
             temperature: uint = 0..8,
         },
 
-        /// Asynchronous write flag
-        /// - Storage: SRAM (read-only)
+        /// Asynchronous-write flag (SRAM, read-only).
         register ASYNCHRONOUS_WRITE_FLAG {
             const ADDRESS = 0x40;
             const SIZE_BITS = 8;
@@ -635,8 +515,7 @@ device_driver::create_device!(
             flag: bool = 0,
         },
 
-        /// Servo status (error flags)
-        /// - Storage: SRAM (read-only)
+        /// Servo status error flags (SRAM, read-only).
         register SERVO_STATUS {
             const ADDRESS = 0x41;
             const SIZE_BITS = 8;
@@ -650,9 +529,7 @@ device_driver::create_device!(
             overload: bool = 5,
         },
 
-        /// Move flag
-        /// - 1: Moving, 0: Stopped
-        /// - Storage: SRAM (read-only)
+        /// Move flag (SRAM, read-only; `1` = moving, `0` = stopped).
         register MOVE_FLAG {
             const ADDRESS = 0x42;
             const SIZE_BITS = 8;
@@ -662,8 +539,7 @@ device_driver::create_device!(
             flag: bool = 0,
         },
 
-        /// Current target position (steps, signed with bit 15).
-        /// - Storage: SRAM (read-only)
+        /// Current target position in signed steps (bit 15 is sign; SRAM, read-only).
         register TARGET_POSITION_READBACK {
             const ADDRESS = 0x43;
             const SIZE_BITS = 16;
@@ -673,9 +549,7 @@ device_driver::create_device!(
             position: uint = 0..16,
         },
 
-        /// Current draw (6.5mA units, signed with bit 15)
-        /// - Storage: SRAM (read-only)
-        /// - Address: 0x45-0x46
+        /// Current draw in signed 6.5 mA units (bit 15 is sign; SRAM, read-only, `0x45`).
         register CURRENT_CURRENT {
             const ADDRESS = 0x45;
             const SIZE_BITS = 16;

@@ -9,6 +9,7 @@ type AsyncExactError<E> = embedded_io_async::ReadExactError<E>;
 
 const HEADER_BYTE: u8 = 0xFF;
 
+/// SCServo packet interface over an embedded UART.
 pub struct UartBusInterface<I> {
     pub(crate) interface: I,
     pub(crate) id: Option<u8>,
@@ -30,6 +31,7 @@ pub struct VersionInformation {
 }
 
 impl<I> UartBusInterface<I> {
+    /// Create a UART bus interface.
     pub fn new(interface: I) -> Self {
         UartBusInterface {
             interface,
@@ -47,10 +49,12 @@ impl<I> UartBusInterface<I> {
         self.response_status_level = enabled;
     }
 
+    /// Select the servo ID used by register operations.
     pub fn set_busid(&mut self, new_id: u8) {
         self.id = Some(new_id);
     }
 
+    /// Clear the ID used by register operations.
     pub fn clear_busid(&mut self) {
         self.id = None;
     }
@@ -116,6 +120,7 @@ impl<I> UartBusInterface<I>
 where
     I: BlockingRead + BlockingWrite,
 {
+    /// Ping a servo.
     pub fn blocking_ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         Self::validate_id(id, false)?;
 
@@ -124,18 +129,21 @@ where
         Ok(())
     }
 
+    /// Reset a servo.
     pub fn blocking_reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut response = [];
         self.blocking_transfer(id, Instruction::Reset, &[], &mut response)?;
         Ok(())
     }
 
+    /// Trigger registered actions.
     pub fn blocking_action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut response = [];
         self.blocking_transfer(id, Instruction::RegAction, &[], &mut response)?;
         Ok(())
     }
 
+    /// Queue raw register data for deferred execution.
     pub fn blocking_reg_write(
         &mut self,
         id: u8,
@@ -150,6 +158,7 @@ where
         Ok(())
     }
 
+    /// Write fixed-size data to multiple servos.
     pub fn blocking_sync_write(
         &mut self,
         address: u8,
@@ -175,6 +184,7 @@ where
         Ok(())
     }
 
+    /// Send a sync-read request without reading the responses.
     pub fn blocking_send_sync_read_request(
         &mut self,
         address: u8,
@@ -212,6 +222,7 @@ where
         Ok(())
     }
 
+    /// Read fixed-size data from multiple servos.
     pub fn blocking_sync_read(
         &mut self,
         address: u8,
@@ -252,6 +263,7 @@ where
         Ok(buf[0])
     }
 
+    /// Read and validate one response packet.
     pub fn blocking_read_response(
         &mut self,
         expected_id: u8,
@@ -413,6 +425,7 @@ where
         Ok(buf[0])
     }
 
+    /// Ping a servo.
     pub async fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         Self::validate_id(id, false)?;
 
@@ -422,6 +435,7 @@ where
         Ok(())
     }
 
+    /// Reset a servo.
     pub async fn reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut response = [];
         self.transfer_async(id, Instruction::Reset, &[], &mut response)
@@ -429,6 +443,7 @@ where
         Ok(())
     }
 
+    /// Trigger registered actions.
     pub async fn action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut response = [];
         self.transfer_async(id, Instruction::RegAction, &[], &mut response)
@@ -436,6 +451,7 @@ where
         Ok(())
     }
 
+    /// Queue raw register data for deferred execution.
     pub async fn reg_write(
         &mut self,
         id: u8,
@@ -451,6 +467,7 @@ where
         Ok(())
     }
 
+    /// Write fixed-size data to multiple servos.
     pub async fn sync_write(
         &mut self,
         address: u8,
@@ -477,6 +494,7 @@ where
         Ok(())
     }
 
+    /// Send a sync-read request without reading the responses.
     pub async fn send_sync_read_request(
         &mut self,
         address: u8,
@@ -520,6 +538,7 @@ where
         Ok(())
     }
 
+    /// Read fixed-size data from multiple servos.
     pub async fn sync_read(
         &mut self,
         address: u8,
@@ -548,6 +567,7 @@ where
         Ok(())
     }
 
+    /// Read and validate one response packet.
     pub async fn read_response_async(
         &mut self,
         expected_id: u8,

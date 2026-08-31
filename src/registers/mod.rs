@@ -1,8 +1,4 @@
-//! Register definitions for SCServo motors.
-//!
-//! This module provides register definitions for different servo series:
-//! - [`sc_device`]: SCSCL/SC series (potentiometer, big-endian)
-//! - [`sts_device`]: SMS/STS series (magnetic encoder, little-endian)
+//! Register definitions for SCSCL/SC and SMS/STS servo series.
 
 #[cfg(feature = "scscl")]
 pub mod sc_device;
@@ -16,15 +12,11 @@ pub use sc_device::ScsclDevice;
 #[cfg(feature = "sms_sts")]
 pub use sts_device::SmsStsDevice;
 
-/// Register addresses used for raw protocol operations (sync read/write, reg write).
-///
-/// These addresses are the same across SCSCL and SMS_STS series.
-/// They are defined here for use in protocol-level operations where the
-/// register abstraction cannot be used (SYNC_READ, SYNC_WRITE, REG_WRITE).
+/// Shared register addresses for raw sync and registered writes.
 pub mod addr {
-    /// Target position register address (0x2A, shared across both series)
+    /// Target position register (`0x2A`).
     pub const TARGET_POSITION: u8 = 0x2A;
-    /// Current position register address (0x38, shared across both series)
+    /// Current position register (`0x38`).
     pub const CURRENT_POSITION: u8 = 0x38;
 }
 
@@ -48,6 +40,7 @@ pub enum BaudRate {
 }
 
 impl BaudRate {
+    /// Convert to bits per second.
     #[must_use]
     pub const fn to_bps(self) -> u32 {
         match self {
@@ -66,6 +59,7 @@ impl BaudRate {
         }
     }
 
+    /// Decode a raw control-table value.
     #[must_use]
     pub const fn from_raw(value: u8) -> Option<Self> {
         match value {
@@ -111,6 +105,7 @@ pub enum TorqueMode {
 }
 
 impl TorqueMode {
+    /// Decode a raw torque-mode value.
     #[must_use]
     pub const fn from_raw(value: u8) -> Option<Self> {
         match value {

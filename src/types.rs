@@ -13,9 +13,7 @@ pub(crate) enum Instruction {
     SyncWrite = 0x83,
 }
 
-/// Position move command for SCSCL series sync writes.
-///
-/// Used with [`ScsclBus::blocking_sync_write_position`](crate::ScsclBus::blocking_sync_write_position).
+/// Position move command for SCSCL sync writes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScsclPositionMove {
@@ -29,9 +27,7 @@ pub struct ScsclPositionMove {
     pub speed: u16,
 }
 
-/// Position move command for SMS_STS series sync writes.
-///
-/// Used with [`SmsStsBus::blocking_sync_write_position`](crate::SmsStsBus::blocking_sync_write_position).
+/// Position move command for SMS_STS sync writes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmsPositionMove {
@@ -47,10 +43,9 @@ pub struct SmsPositionMove {
     pub speed: u16,
 }
 
-/// Position move command with acceleration for SMS_STS series.
+/// SMS_STS position move command with acceleration.
 ///
-/// Used with [`SmsStsBus::blocking_sync_write_position_ex`](crate::SmsStsBus::blocking_sync_write_position_ex).
-/// Writes to ACCELERATION register (0x29) + position/zero-goal-time/speed.
+/// Writes the seven-byte layout beginning at `ACCELERATION` (`0x29`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmsPositionMoveEx {
@@ -83,9 +78,7 @@ pub enum SmsStsOperatingMode {
     Step,
 }
 
-/// Speed command for wheel mode (SMS_STS series).
-///
-/// Used with [`SmsStsBus::blocking_sync_write_speed`](crate::SmsStsBus::blocking_sync_write_speed).
+/// SMS_STS wheel-mode speed command.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmsSpeedCommand {
@@ -97,10 +90,7 @@ pub struct SmsSpeedCommand {
     pub acceleration: u8,
 }
 
-/// Torque/damping mode command for sync writes.
-///
-/// Used with [`SmsStsBus::blocking_sync_write_torque_mode`](crate::SmsStsBus::blocking_sync_write_torque_mode)
-/// and [`ScsclBus::blocking_sync_write_torque_mode`](crate::ScsclBus::blocking_sync_write_torque_mode).
+/// Torque mode command for sync writes.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct TorqueModeCommand {
@@ -110,9 +100,7 @@ pub struct TorqueModeCommand {
     pub mode: crate::TorqueMode,
 }
 
-/// Motor output command for SCSCL wheel mode sync writes.
-///
-/// Used with [`ScsclBus::blocking_sync_write_motor`](crate::ScsclBus::blocking_sync_write_motor).
+/// SCSCL wheel-mode motor output command.
 #[cfg(feature = "scscl")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -124,9 +112,7 @@ pub struct ScsclMotorCommand {
     pub output: i16,
 }
 
-/// Torque limit command for SMS_STS runtime torque limiting.
-///
-/// Used with [`SmsStsBus::blocking_sync_write_torque_limit`](crate::SmsStsBus::blocking_sync_write_torque_limit).
+/// SMS_STS runtime torque-limit command.
 #[cfg(feature = "sms_sts")]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
@@ -137,12 +123,9 @@ pub struct SmsTorqueLimitCommand {
     pub limit: u16,
 }
 
-/// Generic sync write command with fixed-size data.
+/// Generic sync-write command with fixed-size data.
 ///
-/// Used with [`SmsStsBus::blocking_sync_write`](crate::SmsStsBus::blocking_sync_write_raw)
-/// and [`ScsclBus::blocking_sync_write`](crate::ScsclBus::blocking_sync_write).
-///
-/// The `DATA_LEN` const generic specifies how many bytes to write per servo.
+/// `DATA_LEN` specifies the number of bytes written per servo.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SyncWriteData<const DATA_LEN: usize> {
@@ -152,9 +135,7 @@ pub struct SyncWriteData<const DATA_LEN: usize> {
     pub data: [u8; DATA_LEN],
 }
 
-/// Servo status flags.
-///
-/// Returned by the series-specific `blocking_read_status` methods.
+/// Servo status flags returned by the series-specific status methods.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[allow(clippy::struct_excessive_bools)]
@@ -173,13 +154,9 @@ pub struct ScsStatus {
     pub current_error: bool,
 }
 
-/// SCSCL servo state from sync read.
+/// SCSCL servo state from a sync read.
 ///
-/// Returned by [`ScsclBus::blocking_sync_read_state`](crate::ScsclBus::blocking_sync_read_state).
-///
-/// Raw values stored in native hardware units. Use getter methods for converted values:
-/// - [`load()`](Self::load) - Returns load as percentage
-/// - [`voltage()`](Self::voltage) - Returns voltage in volts
+/// Values are stored in native hardware units; getters provide converted load and voltage.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct ScsclServoState {
@@ -213,7 +190,7 @@ impl ScsclServoState {
         self.speed_raw
     }
 
-    /// Get load as percentage (-100.0 to +100.0, negative = CCW).
+    /// Get load as a percentage (-100.0 to +100.0).
     #[inline]
     #[must_use]
     pub fn load(&self) -> f32 {
@@ -235,13 +212,9 @@ impl ScsclServoState {
     }
 }
 
-/// SMS_STS servo state from sync read.
+/// SMS_STS servo state from a sync read.
 ///
-/// Returned by [`SmsStsBus::blocking_sync_read_state`](crate::SmsStsBus::blocking_sync_read_state).
-///
-/// Raw values stored in native hardware units. Use getter methods for converted values:
-/// - [`load()`](Self::load) - Returns load as percentage
-/// - [`voltage()`](Self::voltage) - Returns voltage in volts
+/// Values are stored in native hardware units; getters provide converted load and voltage.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct SmsServoState {
@@ -275,7 +248,7 @@ impl SmsServoState {
         self.speed_raw
     }
 
-    /// Get load as percentage (-100.0 to +100.0, negative = CCW).
+    /// Get load as a percentage (-100.0 to +100.0).
     #[inline]
     #[must_use]
     pub fn load(&self) -> f32 {

@@ -61,14 +61,11 @@ pub const MAX_TORQUE_VALUE: u16 = 1000;
 pub mod scscl_constants {
     /// Resolution of the servo in steps (0-1023)
     pub const SCSCL_RESOLUTION_STEPS: u16 = 1024;
-    /// Nominal maximum angle in degrees for some 220° SCSCL models.
+    /// Nominal maximum angle for some 220° SCSCL models.
     ///
-    /// Published mechanical travel differs between SCSCL models, including SC09
-    /// and SC15 variants.
+    /// Mechanical travel varies by model.
     pub const SCSCL_MAX_ANGLE_DEGREES: f32 = 220.0;
-    /// Nominal degrees per step corresponding to [`SCSCL_MAX_ANGLE_DEGREES`].
-    ///
-    /// This is an approximate model calibration, not a protocol invariant.
+    /// Nominal degrees per step; an approximate model calibration.
     pub const SCSCL_DEGREES_PER_STEP: f32 = 0.214_843_75;
     /// No-load speed in steps per second
     pub const SCSCL_NO_LOAD_SPEED_STEPS_PER_SEC: u16 = 1500;
@@ -101,18 +98,15 @@ pub mod scscl_constants {
 /// SMS_STS series-specific constants
 #[cfg(feature = "sms_sts")]
 pub mod sms_sts_constants {
-    /// Resolution of the servo (12-bit magnetic encoder)
-    ///
-    /// The encoder provides 4096 distinct positions across 360°.
+    /// Resolution of the 12-bit magnetic encoder.
     pub const SMS_STS_RESOLUTION_STEPS: u16 = 4096;
     /// Maximum effective angle in degrees (full rotation)
     pub const SMS_STS_MAX_ANGLE_DEGREES: f32 = 360.0;
     /// Angular resolution (degrees per step)
     pub const SMS_STS_DEGREES_PER_STEP: f32 = 0.087_890_625;
-    /// Maximum position value (12-bit encoder: 0-4095)
+    /// Maximum raw position value (`0..=4095`).
     ///
-    /// With offset calibration, positions can be represented as signed coordinates,
-    /// but the total span is always 4096 positions.
+    /// Offset calibration can expose signed coordinates over the same 4096 positions.
     pub const SMS_STS_MAX_POSITION_STEPS: u16 = 4095;
 
     /// Convert degrees to steps for SMS_STS series.
@@ -145,9 +139,7 @@ const BIT_10_SIGN: u16 = 0x0400;
 #[cfg(any(feature = "scscl", feature = "sms_sts", test))]
 const BIT_10_VALUE: u16 = 0x03FF;
 
-/// Decode signed speed (bit 15 = sign).
-///
-/// Returns: i16 in steps/second (native hardware unit).
+/// Decode signed speed (bit 15 is the sign bit).
 #[allow(clippy::cast_possible_wrap)]
 #[cfg(any(feature = "scscl", feature = "sms_sts", test))]
 pub(crate) fn decode_speed(speed_raw: u16) -> i16 {
@@ -158,10 +150,7 @@ pub(crate) fn decode_speed(speed_raw: u16) -> i16 {
     }
 }
 
-/// Decode signed load (bit 10 = sign).
-///
-/// Returns: i16 in 0.1% units (0-1000 = 0-100%, native hardware unit).
-/// To convert to percentage: `(load as f32) * 0.1`
+/// Decode signed load (bit 10 is the sign bit) in `0.1%` units.
 #[allow(clippy::cast_possible_wrap)]
 #[cfg(any(feature = "scscl", feature = "sms_sts", test))]
 pub(crate) fn decode_load(load_raw: u16) -> i16 {
@@ -172,9 +161,7 @@ pub(crate) fn decode_load(load_raw: u16) -> i16 {
     }
 }
 
-/// Decode signed current (bit 15 = sign).
-///
-/// Returns: i16 in native device-specific units.
+/// Decode signed current (bit 15 is the sign bit).
 #[allow(clippy::cast_possible_wrap)]
 #[cfg(any(feature = "scscl", feature = "sms_sts", test))]
 pub(crate) fn decode_current(current_raw: u16) -> i16 {

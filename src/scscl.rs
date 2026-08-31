@@ -17,18 +17,11 @@ use embedded_io_async::{Read as AsyncRead, Write as AsyncWrite};
 
 /// SCSCL-specific register addresses
 mod addr {
-    /// Torque switch register address (0x28)
+    /// Torque switch register address (`0x28`).
     pub const TORQUE_SWITCH: u8 = 0x28;
 
-    /// Goal time register address (0x2C)
-    ///
-    /// This register has dual purposes depending on the servo's operating mode:
-    /// - **Position mode:** Movement duration in milliseconds (how long to take reaching target position)
-    /// - **Wheel mode:** Signed PWM motor output (bit 10 = sign, range typically -1000 to 1000)
-    ///
-    /// This is standard behavior for SCSCL servos (see SCSCL.h: SCSCL_GOAL_TIME_L = 44 = 0x2C).
-    /// The servo firmware interprets this register differently based on whether angle limits
-    /// are set (position mode) or cleared to 0 (wheel/PWM mode).
+    /// Goal time in milliseconds in position mode; signed PWM output in wheel mode
+    /// (bit 10 is the sign bit, typically `-1000..=1000`).
     pub const GOAL_TIME: u8 = 0x2C;
 }
 
@@ -226,7 +219,7 @@ where
         self.device.interface.blocking_ping(id)
     }
 
-    /// Reset a servo to factory defaults.
+    /// Reset a servo.
     pub fn blocking_reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_reset(id)
     }
@@ -375,7 +368,7 @@ where
     ///
     /// Requires torque enabled first.
     ///
-    /// **Units:** `position` = protocol steps (`0..=1023` for SCSCL)
+    /// **Units:** `steps` = protocol steps (`0..=1023` for SCSCL)
     pub fn blocking_write_position(
         &mut self,
         id: u8,
@@ -490,7 +483,7 @@ where
         self.device.interface.blocking_action(id)
     }
 
-    /// Queue a position command for deferred execution (`steps`, milliseconds, steps/s).
+    /// Queue a position command (`position` in steps, `time` in milliseconds, `speed` in steps/s).
     pub fn blocking_reg_write_position(
         &mut self,
         id: u8,
@@ -507,7 +500,7 @@ where
             .blocking_reg_write(id, registers::addr::TARGET_POSITION, &data)
     }
 
-    /// Move multiple servos simultaneously (more synchronized than individual writes).
+    /// Move multiple servos simultaneously.
     pub fn blocking_sync_write_position<const SIZE: usize>(
         &mut self,
         moves: &[ScsclPositionMove; SIZE],
@@ -676,7 +669,11 @@ where
         self.device.interface.reset(id).await
     }
 
-    /// Set target position.
+    /// Write target position.
+    ///
+    /// Requires torque enabled first.
+    ///
+    /// **Units:** `steps` = protocol steps (`0..=1023` for SCSCL)
     pub async fn write_position(
         &mut self,
         id: u8,
@@ -693,7 +690,7 @@ where
         Ok(())
     }
 
-    /// Get current position.
+    /// Read current position in steps.
     pub async fn read_position(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_position().read_async().await?.position())
