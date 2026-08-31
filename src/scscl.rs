@@ -371,14 +371,7 @@ where
         })
     }
 
-    /// Write target position.
-    ///
-    /// Requires torque enabled first.
-    ///
-    /// **Units:** `steps` = `steps` (0-1023 for SCSCL)
-    ///
-    /// **See also:** [`blocking_sync_write_position`](Self::blocking_sync_write_position),
-    /// [`blocking_reg_write_position`](Self::blocking_reg_write_position) + [`blocking_action`](Self::blocking_action)
+    /// Write a target position in steps (0-1023). Requires torque enabled.
     pub fn blocking_write_position(
         &mut self,
         id: u8,
@@ -398,44 +391,31 @@ where
         Ok(device.current_position().read()?.position())
     }
 
-    /// Read current speed in steps/s.
-    ///
-    /// **Units:** Returns `steps/second` (signed, negative = CCW)
+    /// Read current speed in signed steps/s.
     pub fn blocking_read_speed(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_speed(device.current_speed().read()?.speed()))
     }
 
-    /// Read current voltage.
-    ///
-    /// **Units:** Returns `0.1V` units (120 = 12.0V). Convert with `(voltage as f32) * 0.1`
+    /// Read current voltage in 0.1V units.
     pub fn blocking_read_voltage(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_voltage().read()?.voltage())
     }
 
-    /// Read current temperature.
-    ///
-    /// **Units:** Returns `°C`
+    /// Read current temperature in °C.
     pub fn blocking_read_temperature(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_temperature().read()?.temperature())
     }
 
-    /// Read current load.
-    ///
-    /// **Units:** Returns `0.1%` units (500 = 50.0%). Convert with `(load as f32) * 0.1`
+    /// Read current load in signed 0.1% units.
     pub fn blocking_read_load(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_load(device.current_load().read()?.load()))
     }
 
-    /// Read current draw.
-    ///
-    /// Read current draw when supported by the SCSCL firmware variant.
-    ///
-    /// The returned value is a signed raw register value. The generic Waveshare
-    /// SC table does not define a unit for this optional register.
+    /// Read current draw as a signed raw register value, when supported.
     pub fn blocking_read_current(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_current(device.current_current().read()?.current()))
@@ -461,9 +441,7 @@ where
         Ok(device.move_flag().read()?.flag())
     }
 
-    /// Read servo mode (position or wheel/motor).
-    ///
-    /// SCSCL uses angle limits = 0 to indicate wheel/motor mode.
+    /// Read servo mode; zero angle limits indicate wheel mode.
     pub fn blocking_read_mode(&mut self, id: u8) -> Result<ServoMode, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let min = device.minimum_angle().read()?.angle();
@@ -475,14 +453,7 @@ where
         }
     }
 
-    /// Set servo operating mode.
-    ///
-    /// SCSCL emulates mode switching via angle limits:
-    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
-    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
-    ///
-    /// Custom position-mode angle limits can be applied with
-    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
+    /// Set servo operating mode using the SCSCL angle limits.
     pub fn blocking_set_operating_mode(
         &mut self,
         id: u8,
@@ -496,9 +467,7 @@ where
         }
     }
 
-    /// Write motor output in wheel mode.
-    ///
-    /// **Units:** `output` = signed `PWM` value (positive = CW, negative = CCW, typical range -1000 to 1000)
+    /// Write signed PWM motor output in wheel mode.
     pub fn blocking_write_motor(
         &mut self,
         id: u8,
@@ -510,21 +479,12 @@ where
         Ok(())
     }
 
-    /// Trigger execution of queued REG_WRITE commands.
-    ///
-    /// **See also:** [`blocking_reg_write_position`](Self::blocking_reg_write_position)
+    /// Trigger queued `REG_WRITE` commands.
     pub fn blocking_action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_action(id)
     }
 
-    /// Queue position command for deferred execution.
-    ///
-    /// **Units:**
-    /// - `position` = `steps` (0-1023 for SCSCL)
-    /// - `time` = `milliseconds`
-    /// - `speed` = `steps/second`
-    ///
-    /// **See also:** [`blocking_action`](Self::blocking_action)
+    /// Queue a position command for deferred execution (`steps`, milliseconds, steps/s).
     pub fn blocking_reg_write_position(
         &mut self,
         id: u8,
@@ -567,16 +527,7 @@ where
             .blocking_sync_write(addr::TORQUE_SWITCH, data_len, &payload[..offset])
     }
 
-    /// Set motor output for multiple servos in wheel mode simultaneously.
-    ///
-    /// Writes 2 bytes (big-endian) to GOAL_TIME register (0x2C).
-    /// In wheel/PWM mode, GOAL_TIME is repurposed as motor output register.
-    ///
-    /// **Units:** `output` = signed `PWM` value (positive = CW, negative = CCW, typical range -1000 to 1000)
-    ///
-    /// **Encoding:** Bit 10 = sign (if negative, set bit 10 and use absolute value)
-    ///
-    /// Reference: SCSCL.cpp WritePWM() writes to SCSCL_GOAL_TIME_L (address 44 = 0x2C)
+    /// Set signed PWM motor output for multiple servos in wheel mode.
     pub fn blocking_sync_write_motor<const SIZE: usize>(
         &mut self,
         commands: &[ScsclMotorCommand; SIZE],
@@ -588,22 +539,7 @@ where
             .blocking_sync_write(addr::GOAL_TIME, data_len, &payload[..offset])
     }
 
-    /// Generic sync write to any register address.
-    ///
-    /// Writes fixed-size data to the same register address on multiple servos simultaneously.
-    /// The `DATA_LEN` const generic specifies how many bytes to write per servo.
-    ///
-    /// # Example
-    /// ```ignore
-    /// use waveshare_scservo::SyncWriteData;
-    ///
-    /// // Write 2 bytes to register 0x30 for servos 1 and 2
-    /// let commands = [
-    ///     SyncWriteData { id: 1, data: [0x12, 0x34] },  // Big-endian: 0x1234
-    ///     SyncWriteData { id: 2, data: [0x56, 0x78] },  // Big-endian: 0x5678
-    /// ];
-    /// bus.blocking_sync_write(0x30, &commands)?;
-    /// ```
+    /// Write fixed-size data to one register on multiple servos.
     pub fn blocking_sync_write<const DATA_LEN: usize, const SIZE: usize>(
         &mut self,
         address: u8,
@@ -658,9 +594,7 @@ where
         Ok(states)
     }
 
-    /// Read all telemetry (position, speed, load, voltage, temperature, etc.) in one transaction.
-    ///
-    /// More efficient than calling individual `blocking_read_*` functions.
+    /// Read all telemetry in one transaction.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     pub fn blocking_read_state(
         &mut self,
@@ -761,14 +695,7 @@ where
         Ok(device.move_flag().read_async().await?.flag())
     }
 
-    /// Set servo operating mode.
-    ///
-    /// SCSCL emulates mode switching via angle limits:
-    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
-    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
-    ///
-    /// Custom position-mode angle limits can be applied with
-    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
+    /// Set servo operating mode using the SCSCL angle limits.
     pub async fn set_operating_mode(
         &mut self,
         id: u8,
@@ -809,9 +736,7 @@ where
         }
     }
 
-    /// Write motor output in wheel/motor mode.
-    ///
-    /// Signed: positive = CW, negative = CCW.
+    /// Write signed PWM motor output in wheel mode.
     pub async fn write_motor(
         &mut self,
         id: u8,

@@ -532,14 +532,8 @@ where
         })
     }
 
-    /// Write target position.
-    ///
-    /// Requires torque enabled first.
-    ///
-    /// **Units:** `position` = signed protocol steps (`-32767..=32767`)
-    ///
-    /// **See also:** [`blocking_sync_write_position`](Self::blocking_sync_write_position),
-    /// [`blocking_reg_write_position`](Self::blocking_reg_write_position) + [`blocking_action`](Self::blocking_action)
+    /// Write a target position in signed protocol steps (-32767..=32767).
+    /// Requires torque enabled.
     pub fn blocking_write_position(
         &mut self,
         id: u8,
@@ -553,50 +547,38 @@ where
         Ok(())
     }
 
-    /// Read current position in steps.
-    ///
-    /// **Units:** Returns signed protocol steps.
+    /// Read current position in signed protocol steps.
     pub fn blocking_read_position(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read()?.position();
         Ok(decode_signed_position(position_raw))
     }
 
-    /// Read current speed in steps/s.
-    ///
-    /// **Units:** Returns `steps/second` (signed, negative = CCW)
+    /// Read current speed in signed steps/s.
     pub fn blocking_read_speed(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_speed(device.current_speed().read()?.speed()))
     }
 
-    /// Read current voltage.
-    ///
-    /// **Units:** Returns `0.1V` units (120 = 12.0V). Convert with `(voltage as f32) * 0.1`
+    /// Read current voltage in 0.1V units.
     pub fn blocking_read_voltage(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_voltage().read()?.voltage())
     }
 
-    /// Read current temperature.
-    ///
-    /// **Units:** Returns `°C`
+    /// Read current temperature in °C.
     pub fn blocking_read_temperature(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_temperature().read()?.temperature())
     }
 
-    /// Read current load.
-    ///
-    /// **Units:** Returns `0.1%` units (500 = 50.0%). Convert with `(load as f32) * 0.1`
+    /// Read current load in signed 0.1% units.
     pub fn blocking_read_load(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_load(device.current_load().read()?.load()))
     }
 
-    /// Read current draw.
-    ///
-    /// **Units:** Returns signed current counts. SMS/ST uses 6.5 mA per count.
+    /// Read current draw in signed device-specific counts.
     pub fn blocking_read_current(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_current(device.current_current().read()?.current()))
@@ -622,11 +604,7 @@ where
         Ok(device.move_flag().read()?.flag())
     }
 
-    /// Read servo mode as the generic position-or-wheel mode.
-    ///
-    /// Returns [`ProtocolError::InvalidSetting`] for PWM-open-loop, step, or
-    /// unrecognized SMS/ST modes. Use [`blocking_read_operating_mode`](Self::blocking_read_operating_mode)
-    /// to read all supported SMS/ST modes.
+    /// Read the servo mode as position or wheel.
     pub fn blocking_read_mode(&mut self, id: u8) -> Result<ServoMode, ProtocolError<I::Error>> {
         match self.blocking_read_operating_mode(id)? {
             SmsStsOperatingMode::Wheel => Ok(ServoMode::Wheel),
@@ -676,11 +654,7 @@ where
         )
     }
 
-    /// Calibrate offset (SMS_STS specific).
-    ///
-    /// Sets the servo to calibration mode. The current position becomes the new zero point.
-    /// Use [`blocking_read_offset`](Self::blocking_read_offset) to read the calculated offset value,
-    /// or [`blocking_set_offset`](Self::blocking_set_offset) to manually set an offset.
+    /// Calibrate the position offset (SMS_STS-specific).
     pub fn blocking_calibrate(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         device
@@ -689,38 +663,14 @@ where
         Ok(())
     }
 
-    /// Read position offset.
-    ///
-    /// The offset shifts the coordinate system. The servo's 12-bit encoder provides 4096
-    /// positions (0-4095). An offset can center this range around any point.
-    ///
-    /// **Examples:**
-    /// - offset=0: positions 0 to 4095
-    /// - offset=2048: positions -2048 to +2047 (centered)
-    /// - offset=4095: positions -4095 to 0
-    ///
-    /// **Units:** `offset` = `steps` (signed)
+    /// Read the signed position offset in steps.
     pub fn blocking_read_offset(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let offset_raw = device.offset().read()?.offset();
         decode_offset(offset_raw).ok_or(ProtocolError::InvalidSetting)
     }
 
-    /// Set position offset.
-    ///
-    /// Manually sets the position offset value. This shifts the coordinate system.
-    /// The servo's 12-bit encoder provides 4096 positions (0-4095). An offset
-    /// can center this range around any point.
-    ///
-    /// **Examples:**
-    /// - offset=0: positions 0 to 4095 (default)
-    /// - offset=2048: positions -2048 to +2047 (centered)
-    /// - offset=4095: positions -4095 to 0
-    ///
-    /// [`blocking_calibrate`](Self::blocking_calibrate) calibrates the offset to the
-    /// current position automatically.
-    ///
-    /// **Units:** `offset` = `steps` (signed)
+    /// Set the signed position offset in steps.
     pub fn blocking_set_offset(
         &mut self,
         id: u8,
@@ -739,14 +689,7 @@ where
         self.device.interface.blocking_action(id)
     }
 
-    /// Queue position command for deferred execution.
-    ///
-    /// **Units:**
-    /// - `position` = signed protocol steps (`-32767..=32767`)
-    /// - `time` = retained API parameter; position commands write zero to goal-time
-    /// - `speed` = `steps/second`
-    ///
-    /// **See also:** [`blocking_action`](Self::blocking_action)
+    /// Queue a position command for deferred execution (steps, milliseconds, steps/s).
     pub fn blocking_reg_write_position(
         &mut self,
         id: u8,
@@ -787,16 +730,7 @@ where
             .blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
     }
 
-    /// Set speed for multiple servos in wheel mode simultaneously.
-    ///
-    /// Writes 7 bytes starting at ACCELERATION register (0x29):
-    /// - Acceleration (1 byte)
-    /// - Position (2 bytes, set to 0, ignored in wheel mode)
-    /// - Time (2 bytes, set to 0, ignored in wheel mode)
-    /// - Speed (2 bytes, signed with bit 15 = direction)
-    ///
-    /// This follows the SMS_STS protocol specification where speed control
-    /// uses the same register layout as position control (SyncWritePosEx in C reference).
+    /// Set wheel-mode speed for multiple servos.
     pub fn blocking_sync_write_speed<const SIZE: usize>(
         &mut self,
         commands: &[SmsSpeedCommand; SIZE],
@@ -808,9 +742,7 @@ where
             .blocking_sync_write(addr::ACCELERATION, data_len, &payload[..offset])
     }
 
-    /// Set torque mode for multiple servos simultaneously.
-    ///
-    /// Writes torque mode (Enable/Disable/Free) in a single broadcast packet.
+    /// Set torque mode for multiple servos.
     pub fn blocking_sync_write_torque_mode<const SIZE: usize>(
         &mut self,
         commands: &[TorqueModeCommand; SIZE],
@@ -836,22 +768,7 @@ where
             .blocking_sync_write(addr::TORQUE_LIMIT, data_len, &payload[..offset])
     }
 
-    /// Generic sync write to any register address.
-    ///
-    /// Writes fixed-size data to the same register address on multiple servos simultaneously.
-    /// The `DATA_LEN` const generic specifies how many bytes to write per servo.
-    ///
-    /// # Example
-    /// ```ignore
-    /// use waveshare_scservo::SyncWriteData;
-    ///
-    /// // Write 2 bytes to register 0x30 for servos 1 and 2
-    /// let commands = [
-    ///     SyncWriteData { id: 1, data: [0x12, 0x34] },  // Little-endian: 0x3412
-    ///     SyncWriteData { id: 2, data: [0x56, 0x78] },  // Little-endian: 0x7856
-    /// ];
-    /// bus.blocking_sync_write(0x30, &commands)?;
-    /// ```
+    /// Write fixed-size data to one register on multiple servos.
     pub fn blocking_sync_write_raw<const DATA_LEN: usize, const SIZE: usize>(
         &mut self,
         address: u8,
@@ -980,9 +897,7 @@ where
         self.device.interface.reset(id).await
     }
 
-    /// Set target position.
-    ///
-    /// **Units:** `position` = signed protocol steps (`-32767..=32767`)
+    /// Write a target position in signed protocol steps (-32767..=32767).
     pub async fn write_position(
         &mut self,
         id: u8,
@@ -997,9 +912,7 @@ where
         Ok(())
     }
 
-    /// Get current position.
-    ///
-    /// **Units:** Returns signed protocol steps.
+    /// Read current position in signed protocol steps.
     pub async fn read_position(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let position_raw = device.current_position().read_async().await?.position();
@@ -1056,24 +969,14 @@ where
         .await
     }
 
-    /// Read position offset.
-    ///
-    /// The offset shifts the coordinate system. Valid offsets are constrained by the
-    /// 4096-position encoder range (e.g., offset=2048 gives range -2048 to +2047).
-    ///
-    /// **Units:** `offset` = `steps` (signed)
+    /// Read the signed position offset in steps.
     pub async fn read_offset(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let offset_raw = device.offset().read_async().await?.offset();
         decode_offset(offset_raw).ok_or(ProtocolError::InvalidSetting)
     }
 
-    /// Set position offset.
-    ///
-    /// The offset shifts the coordinate system. Valid offsets are constrained by the
-    /// 4096-position encoder range (e.g., offset=2048 gives range -2048 to +2047).
-    ///
-    /// **Units:** `offset` = `steps` (signed)
+    /// Set the signed position offset in steps.
     pub async fn set_offset(&mut self, id: u8, offset: i16) -> Result<(), ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let encoded = encode_offset(offset).ok_or(ProtocolError::InvalidSetting)?;
