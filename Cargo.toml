@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["Louis Schell <louis.schell1@gmx.de>"]
 description = "Waveshare SCServo protocol over embedded-io"
 keywords = ["embedded", "waveshare", "servo", "SC09", "SC15"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 embedded-io = "0.7.1"
