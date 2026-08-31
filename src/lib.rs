@@ -5,47 +5,11 @@
 
 //! Rust driver for Waveshare SCServo motors.
 //!
-//! This library supports two servo series with **separate bus types**:
-//! - **SCSCL** (`ScsclBus`): Potentiometer-based, big-endian protocol
-//! - **SMS_STS** (`SmsStsBus`): Magnetic encoder, little-endian protocol
-//!
-//! # Feature Flags (Additive)
-//!
-//! - `scscl` (default): Enable `ScsclBus` for SCSCL series
-//! - `sms_sts`: Enable `SmsStsBus` for SMS_STS series
-//!
-//! Both features can be enabled simultaneously.
-//!
-//! # Example
-//!
-//! ```ignore
-//! use waveshare_scservo::ScsclBus;
-//!
-//! let mut bus = ScsclBus::new(serial_interface);
-//! bus.blocking_ping(1)?;
-//! bus.blocking_write_position(1, 512)?;
-//! ```
-//!
-//! # Protocol notes
-//!
-//! The wire protocol is shared across the series: packets use an `FF FF` header,
-//! an ID, `N + 2` length, instruction, parameters, and the one's-complement
-//! checksum of all fields after the header. SCSCL registers use big-endian
-//! multi-byte values; SMS/STS registers use little-endian values.
-//!
-//! SCSCL and SMS/STS commonly use different electrical buses
-//! (half-duplex TTL versus RS-485). The packet layer assumes an external
-//! transceiver and transmit/receive turnaround implementation.
-//!
-//! # References
-//!
-//! - [Waveshare communication protocol manual](<https://files.waveshare.com/upload/2/27/Communication_Protocol_User_Manual-EN(191218-0923).pdf>)
-//! - [FTServo reference implementations](https://github.com/ftservo/FTServo_Arduino/tree/main/src)
+//! Supports SCSCL (`ScsclBus`) and SMS/STS (`SmsStsBus`) servo series.
 
 #[cfg(test)]
 extern crate std;
 
-// Modules
 pub mod error;
 pub mod registers;
 pub mod series;
@@ -61,7 +25,6 @@ mod sms_sts;
 #[cfg(test)]
 mod mock;
 
-// Re-exports
 pub use error::ProtocolError;
 pub use registers::{BaudRate, TorqueMode};
 pub use series::{ServoMode, ServoTelemetry};
@@ -172,8 +135,6 @@ pub mod sms_sts_constants {
         steps as f32 * SMS_STS_DEGREES_PER_STEP
     }
 }
-
-// Internal constants (pub(crate) for use by bus modules)
 
 #[cfg(any(feature = "scscl", feature = "sms_sts", test))]
 const BIT_15_SIGN: u16 = 0x8000;
