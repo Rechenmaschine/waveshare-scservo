@@ -179,16 +179,22 @@ fn parse_state_chunk(id: u8, chunk: &[u8]) -> ScsclServoState {
 }
 
 impl<I> ScsclBus<I> {
+    /// Create a new SCSCL servo bus.
     pub fn new(interface: I) -> Self {
         let uart = UartBusInterface::new(interface);
         let device = ScsclDevice::new(uart);
         ScsclBus { device }
     }
 
+    /// Get mutable access to the underlying device.
     pub fn inner_mut(&mut self) -> &mut ScsclDevice<UartBusInterface<I>> {
         &mut self.device
     }
 
+    /// Configure whether unicast write-like commands are expected to reply.
+    ///
+    /// Response level 1 is the default. Set this to `false` when the servo's
+    /// response status level is 0; READ and PING still expect replies.
     pub fn set_response_status_level(&mut self, enabled: bool) {
         self.device.interface.set_response_status_level(enabled);
     }
@@ -198,6 +204,7 @@ impl<I> ScsclBus<I>
 where
     I: BlockingRead + BlockingWrite,
 {
+    /// Read firmware and servo version bytes.
     pub fn blocking_read_version(
         &mut self,
         id: u8,
@@ -211,6 +218,7 @@ where
         })
     }
 
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub fn blocking_ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -218,10 +226,12 @@ where
         self.device.interface.blocking_ping(id)
     }
 
+    /// Reset a servo to factory defaults.
     pub fn blocking_reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_reset(id)
     }
 
+    /// Change a servo's ID.
     pub fn blocking_set_id(
         &mut self,
         current_id: u8,
@@ -243,6 +253,7 @@ where
         Ok(())
     }
 
+    /// Set torque mode.
     pub fn blocking_set_torque_mode(
         &mut self,
         id: u8,
@@ -253,6 +264,9 @@ where
         Ok(())
     }
 
+    /// Set angle limits.
+    ///
+    /// **Units:** `min`, `max` = `steps` (0-1023)
     pub fn blocking_set_angle_limits(
         &mut self,
         id: u8,
@@ -271,6 +285,9 @@ where
         })
     }
 
+    /// Set voltage limits.
+    ///
+    /// **Units:** `min_voltage`, `max_voltage` = `0.1V` units (120 = 12.0V)
     pub fn blocking_set_voltage_limits(
         &mut self,
         id: u8,
@@ -292,6 +309,9 @@ where
         })
     }
 
+    /// Set maximum temperature limit.
+    ///
+    /// **Units:** `max_temp` = `°C`
     pub fn blocking_set_max_temperature_limit(
         &mut self,
         id: u8,
@@ -309,6 +329,9 @@ where
         })
     }
 
+    /// Set maximum torque.
+    ///
+    /// **Units:** `max_torque` = `0.1%` units (500 = 50.0%, max 1000 = 100%)
     pub fn blocking_set_max_torque(
         &mut self,
         id: u8,
@@ -326,6 +349,10 @@ where
         })
     }
 
+    /// Set PID coefficients.
+    ///
+    /// **Units:** `kp`, `kd` = unitless (0-254).
+    /// The generic SCSCL table reserves the I-coefficient address, so `ki` must be 0.
     pub fn blocking_set_pid_coefficients(
         &mut self,
         id: u8,
@@ -344,6 +371,14 @@ where
         })
     }
 
+    /// Write target position.
+    ///
+    /// Requires torque enabled first.
+    ///
+    /// **Units:** `steps` = `steps` (0-1023 for SCSCL)
+    ///
+    /// **See also:** [`blocking_sync_write_position`](Self::blocking_sync_write_position),
+    /// [`blocking_reg_write_position`](Self::blocking_reg_write_position) + [`blocking_action`](Self::blocking_action)
     pub fn blocking_write_position(
         &mut self,
         id: u8,
@@ -357,36 +392,56 @@ where
         Ok(())
     }
 
+    /// Read current position in steps.
     pub fn blocking_read_position(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_position().read()?.position())
     }
 
+    /// Read current speed in steps/s.
+    ///
+    /// **Units:** Returns `steps/second` (signed, negative = CCW)
     pub fn blocking_read_speed(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_speed(device.current_speed().read()?.speed()))
     }
 
+    /// Read current voltage.
+    ///
+    /// **Units:** Returns `0.1V` units (120 = 12.0V). Convert with `(voltage as f32) * 0.1`
     pub fn blocking_read_voltage(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_voltage().read()?.voltage())
     }
 
+    /// Read current temperature.
+    ///
+    /// **Units:** Returns `°C`
     pub fn blocking_read_temperature(&mut self, id: u8) -> Result<u8, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_temperature().read()?.temperature())
     }
 
+    /// Read current load.
+    ///
+    /// **Units:** Returns `0.1%` units (500 = 50.0%). Convert with `(load as f32) * 0.1`
     pub fn blocking_read_load(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_load(device.current_load().read()?.load()))
     }
 
+    /// Read current draw.
+    ///
+    /// Read current draw when supported by the SCSCL firmware variant.
+    ///
+    /// The returned value is a signed raw register value. The generic Waveshare
+    /// SC table does not define a unit for this optional register.
     pub fn blocking_read_current(&mut self, id: u8) -> Result<i16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(decode_current(device.current_current().read()?.current()))
     }
 
+    /// Read servo status flags.
     pub fn blocking_read_status(&mut self, id: u8) -> Result<ScsStatus, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let status = device.servo_status().read()?;
@@ -400,11 +455,15 @@ where
         })
     }
 
+    /// Check if servo is moving.
     pub fn blocking_is_moving(&mut self, id: u8) -> Result<bool, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.move_flag().read()?.flag())
     }
 
+    /// Read servo mode (position or wheel/motor).
+    ///
+    /// SCSCL uses angle limits = 0 to indicate wheel/motor mode.
     pub fn blocking_read_mode(&mut self, id: u8) -> Result<ServoMode, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         let min = device.minimum_angle().read()?.angle();
@@ -416,6 +475,14 @@ where
         }
     }
 
+    /// Set servo operating mode.
+    ///
+    /// SCSCL emulates mode switching via angle limits:
+    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
+    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
+    ///
+    /// Custom position-mode angle limits can be applied with
+    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
     pub fn blocking_set_operating_mode(
         &mut self,
         id: u8,
@@ -429,6 +496,9 @@ where
         }
     }
 
+    /// Write motor output in wheel mode.
+    ///
+    /// **Units:** `output` = signed `PWM` value (positive = CW, negative = CCW, typical range -1000 to 1000)
     pub fn blocking_write_motor(
         &mut self,
         id: u8,
@@ -440,10 +510,21 @@ where
         Ok(())
     }
 
+    /// Trigger execution of queued REG_WRITE commands.
+    ///
+    /// **See also:** [`blocking_reg_write_position`](Self::blocking_reg_write_position)
     pub fn blocking_action(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.blocking_action(id)
     }
 
+    /// Queue position command for deferred execution.
+    ///
+    /// **Units:**
+    /// - `position` = `steps` (0-1023 for SCSCL)
+    /// - `time` = `milliseconds`
+    /// - `speed` = `steps/second`
+    ///
+    /// **See also:** [`blocking_action`](Self::blocking_action)
     pub fn blocking_reg_write_position(
         &mut self,
         id: u8,
@@ -460,6 +541,7 @@ where
             .blocking_reg_write(id, registers::addr::TARGET_POSITION, &data)
     }
 
+    /// Move multiple servos simultaneously (more synchronized than individual writes).
     pub fn blocking_sync_write_position<const SIZE: usize>(
         &mut self,
         moves: &[ScsclPositionMove; SIZE],
@@ -473,6 +555,7 @@ where
         )
     }
 
+    /// Set torque mode for multiple servos simultaneously.
     pub fn blocking_sync_write_torque_mode<const SIZE: usize>(
         &mut self,
         commands: &[TorqueModeCommand; SIZE],
@@ -484,6 +567,16 @@ where
             .blocking_sync_write(addr::TORQUE_SWITCH, data_len, &payload[..offset])
     }
 
+    /// Set motor output for multiple servos in wheel mode simultaneously.
+    ///
+    /// Writes 2 bytes (big-endian) to GOAL_TIME register (0x2C).
+    /// In wheel/PWM mode, GOAL_TIME is repurposed as motor output register.
+    ///
+    /// **Units:** `output` = signed `PWM` value (positive = CW, negative = CCW, typical range -1000 to 1000)
+    ///
+    /// **Encoding:** Bit 10 = sign (if negative, set bit 10 and use absolute value)
+    ///
+    /// Reference: SCSCL.cpp WritePWM() writes to SCSCL_GOAL_TIME_L (address 44 = 0x2C)
     pub fn blocking_sync_write_motor<const SIZE: usize>(
         &mut self,
         commands: &[ScsclMotorCommand; SIZE],
@@ -495,6 +588,22 @@ where
             .blocking_sync_write(addr::GOAL_TIME, data_len, &payload[..offset])
     }
 
+    /// Generic sync write to any register address.
+    ///
+    /// Writes fixed-size data to the same register address on multiple servos simultaneously.
+    /// The `DATA_LEN` const generic specifies how many bytes to write per servo.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use waveshare_scservo::SyncWriteData;
+    ///
+    /// // Write 2 bytes to register 0x30 for servos 1 and 2
+    /// let commands = [
+    ///     SyncWriteData { id: 1, data: [0x12, 0x34] },  // Big-endian: 0x1234
+    ///     SyncWriteData { id: 2, data: [0x56, 0x78] },  // Big-endian: 0x5678
+    /// ];
+    /// bus.blocking_sync_write(0x30, &commands)?;
+    /// ```
     pub fn blocking_sync_write<const DATA_LEN: usize, const SIZE: usize>(
         &mut self,
         address: u8,
@@ -518,6 +627,7 @@ where
             .blocking_sync_write(address, data_len, &payload[..offset])
     }
 
+    /// Sync read state from multiple servos.
     pub fn blocking_sync_read_state<const SIZE: usize>(
         &mut self,
         ids: &[u8; SIZE],
@@ -548,6 +658,9 @@ where
         Ok(states)
     }
 
+    /// Read all telemetry (position, speed, load, voltage, temperature, etc.) in one transaction.
+    ///
+    /// More efficient than calling individual `blocking_read_*` functions.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     pub fn blocking_read_state(
         &mut self,
@@ -576,6 +689,7 @@ impl<I> ScsclBus<I>
 where
     I: AsyncRead + AsyncWrite,
 {
+    /// Read firmware and servo version bytes.
     pub async fn read_version(
         &mut self,
         id: u8,
@@ -605,6 +719,7 @@ where
         })
     }
 
+    /// Ping a servo. Broadcast PING is rejected because multiple replies can collide.
     pub async fn ping(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         if id == crate::BROADCAST_ID {
             return Err(ProtocolError::InvalidId);
@@ -612,10 +727,12 @@ where
         self.device.interface.ping(id).await
     }
 
+    /// Reset a servo.
     pub async fn reset(&mut self, id: u8) -> Result<(), ProtocolError<I::Error>> {
         self.device.interface.reset(id).await
     }
 
+    /// Set target position.
     pub async fn write_position(
         &mut self,
         id: u8,
@@ -632,16 +749,26 @@ where
         Ok(())
     }
 
+    /// Get current position.
     pub async fn read_position(&mut self, id: u8) -> Result<u16, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.current_position().read_async().await?.position())
     }
 
+    /// Check if servo is moving.
     pub async fn is_moving(&mut self, id: u8) -> Result<bool, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
         Ok(device.move_flag().read_async().await?.flag())
     }
 
+    /// Set servo operating mode.
+    ///
+    /// SCSCL emulates mode switching via angle limits:
+    /// - [`ServoMode::Wheel`]: Sets angle limits to 0..0 (enables wheel mode)
+    /// - [`ServoMode::Position`]: Restores angle limits to 0..1023 (default position mode range)
+    ///
+    /// Custom position-mode angle limits can be applied with
+    /// [`blocking_set_angle_limits`](Self::blocking_set_angle_limits) after switching modes.
     pub async fn set_operating_mode(
         &mut self,
         id: u8,
@@ -682,6 +809,9 @@ where
         }
     }
 
+    /// Write motor output in wheel/motor mode.
+    ///
+    /// Signed: positive = CW, negative = CCW.
     pub async fn write_motor(
         &mut self,
         id: u8,
@@ -696,6 +826,7 @@ where
         Ok(())
     }
 
+    /// Read full telemetry.
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     pub async fn read_state(&mut self, id: u8) -> Result<ServoTelemetry, ProtocolError<I::Error>> {
         let mut device = BusIdGuard::new(&mut self.device, id);
