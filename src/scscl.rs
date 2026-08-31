@@ -371,7 +371,11 @@ where
         })
     }
 
-    /// Write a target position in steps (0-1023). Requires torque enabled.
+    /// Write target position.
+    ///
+    /// Requires torque enabled first.
+    ///
+    /// **Units:** `position` = protocol steps (`0..=1023` for SCSCL)
     pub fn blocking_write_position(
         &mut self,
         id: u8,
@@ -453,7 +457,9 @@ where
         }
     }
 
-    /// Set servo operating mode using the SCSCL angle limits.
+    /// Set servo operating mode.
+    ///
+    /// SCSCL uses angle limits `0..0` for wheel mode and `0..1023` for position mode.
     pub fn blocking_set_operating_mode(
         &mut self,
         id: u8,
@@ -528,6 +534,8 @@ where
     }
 
     /// Set signed PWM motor output for multiple servos in wheel mode.
+    ///
+    /// Writes to the SCSCL `GOAL_TIME` register (`0x2C`); bit 10 is the sign bit.
     pub fn blocking_sync_write_motor<const SIZE: usize>(
         &mut self,
         commands: &[ScsclMotorCommand; SIZE],
@@ -540,6 +548,8 @@ where
     }
 
     /// Write fixed-size data to one register on multiple servos.
+    ///
+    /// `DATA_LEN` is the number of bytes written per servo.
     pub fn blocking_sync_write<const DATA_LEN: usize, const SIZE: usize>(
         &mut self,
         address: u8,
@@ -695,7 +705,9 @@ where
         Ok(device.move_flag().read_async().await?.flag())
     }
 
-    /// Set servo operating mode using the SCSCL angle limits.
+    /// Set servo operating mode.
+    ///
+    /// SCSCL uses angle limits `0..0` for wheel mode and `0..1023` for position mode.
     pub async fn set_operating_mode(
         &mut self,
         id: u8,
