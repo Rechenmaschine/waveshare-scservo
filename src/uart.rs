@@ -38,11 +38,6 @@ impl<I> UartBusInterface<I> {
         }
     }
 
-    /// Configure whether unicast write-like commands are expected to reply.
-    ///
-    /// Response level 1 is the default. At response level 0, only READ and
-    /// PING commands return status packets; set this to `false` after the
-    /// servo is configured that way.
     pub fn set_response_status_level(&mut self, enabled: bool) {
         self.response_status_level = enabled;
     }
